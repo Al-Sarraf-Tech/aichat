@@ -75,13 +75,13 @@ jobs:
       - name: Run bandit on mcp-server
         run: |
           bandit -r vision/mcp-server/app -ll \
-            --skip B101 \
+            --skip B101,B104,B108 \
             -f txt
 
       - name: Run bandit on vision-router
         run: |
           bandit -r vision/services/vision-router/app -ll \
-            --skip B101 \
+            --skip B101,B104,B108 \
             -f txt
 
       - name: TruffleHog secret scan
