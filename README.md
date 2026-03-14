@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/jalsarraf0/aichat/actions/workflows/ci.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/ci.yml)
 [![Security CI](https://github.com/jalsarraf0/aichat/actions/workflows/security.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/security.yml)
+[![SBOM & Vulnerability Audit](https://github.com/jalsarraf0/aichat/actions/workflows/sbom.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/sbom.yml)
+[![Vision Stack CI](https://github.com/jalsarraf0/aichat/actions/workflows/vision-ci.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/vision-ci.yml)
 [![Release](https://github.com/jalsarraf0/aichat/actions/workflows/release.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/jalsarraf0/aichat?display_name=tag)](https://github.com/jalsarraf0/aichat/releases)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
