@@ -31,7 +31,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   build-python-dist:
     name: Build Python Dist
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   build-binary:
     name: Build Binary
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +93,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   build-images:
     name: Build Image / ${{ matrix.service }}
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -142,7 +142,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   sbom:
     name: SBOM / ${{ matrix.service }}
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: build-images
     strategy:
@@ -196,7 +196,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [build-python-dist, build-binary, sbom]
     steps:

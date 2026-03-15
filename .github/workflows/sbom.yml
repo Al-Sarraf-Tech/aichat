@@ -25,7 +25,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   build:
     name: Build / ${{ matrix.service }}
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -71,7 +71,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   sbom-scan:
     name: SBOM+Scan / ${{ matrix.service }}
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: build
     strategy:
@@ -168,7 +168,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   pip-audit:
     name: Python Dependency Audit
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -212,7 +212,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   sbom-summary:
     name: SBOM Summary
-    runs-on: [self-hosted, Linux, X64, docker]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [sbom-scan, pip-audit]
     if: always()
