@@ -19,7 +19,7 @@ TARGET_MODEL = os.environ.get("AICHAT_SMOKE_MODEL", "gpt-oss-20b")
 
 def _up(url: str) -> bool:
     try:
-        return httpx.get(url, timeout=3).status_code < 500
+        return httpx.get(url, timeout=3).status_code == 200
     except Exception:
         return False
 

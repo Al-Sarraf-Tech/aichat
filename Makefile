@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
-SERVICES := aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp
+SERVICES := aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp aichat-jupyter aichat-browser
 
 .PHONY: help build up down restart logs smoke test lint security-checks \
         generate-lmstudio-json
@@ -80,7 +80,9 @@ test:
 lint:
 	@command -v ruff >/dev/null || { echo 'missing ruff — pip install ruff'; exit 1; }
 	ruff check docker/
-	@command -v mypy >/dev/null && mypy --ignore-missing-imports docker/ || true
+	@command -v mypy >/dev/null && mypy --ignore-missing-imports --explicit-package-bases \
+	  docker/data/app.py docker/vision/app.py docker/docs/app.py docker/sandbox/app.py \
+	  docker/mcp/app.py docker/jupyter/app.py docker/browser/app.py || true
 
 # ---------------------------------------------------------------------------
 # Security checks (existing targets preserved)

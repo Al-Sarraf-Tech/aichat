@@ -307,9 +307,10 @@ class TestImageScan:
         scan_data = _get_image_bytes(_mcp_content("image_scan", {"path": test_image_path}))
         scan_img = Image.open(io.BytesIO(scan_data))
         # Greyscale stored as RGB JPEG — channels should be nearly equal (allow JPEG rounding)
-        r_arr = list(scan_img.getdata(band=0))
-        g_arr = list(scan_img.getdata(band=1))
-        b_arr = list(scan_img.getdata(band=2))
+        r, g, b = scan_img.split()
+        r_arr = list(r.tobytes())
+        g_arr = list(g.tobytes())
+        b_arr = list(b.tobytes())
         diffs = [abs(rv - gv) + abs(rv - bv) for rv, gv, bv in zip(r_arr, g_arr, b_arr)]
         mean_diff = sum(diffs) / len(diffs)
         assert mean_diff < 15, f"Scanned image does not look greyscale (mean channel diff={mean_diff:.1f})"
@@ -342,7 +343,7 @@ class TestImageEnhance:
         img = Image.open(io.BytesIO(_get_image_bytes(blocks)))
         r, g, b = img.split()
         diffs = [abs(rv - gv) + abs(rv - bv)
-                 for rv, gv, bv in zip(r.getdata(), g.getdata(), b.getdata())]
+                 for rv, gv, bv in zip(r.tobytes(), g.tobytes(), b.tobytes())]
         mean_diff = sum(diffs) / len(diffs)
         assert mean_diff < 15, "Greyscale flag did not produce a grey image"
 
@@ -428,7 +429,7 @@ class TestImagePipeline:
         # Scan should be greyscale (R≈G≈B)
         r, g, b = scan_img.split()
         diffs = [abs(rv - gv) + abs(rv - bv)
-                 for rv, gv, bv in zip(r.getdata(), g.getdata(), b.getdata())]
+                 for rv, gv, bv in zip(r.tobytes(), g.tobytes(), b.tobytes())]
         assert sum(diffs) / len(diffs) < 15
 
         # Zoom image should be wider than original (400px * 2.0 = 800px)
@@ -842,9 +843,10 @@ class TestImageDiff:
         )
         img = Image.open(io.BytesIO(diff_bytes)).convert("RGB")
         # Count pixels that are not white (255, 255, 255) — tiny noise is ok
-        pixels = list(img.getdata())
-        non_white = sum(1 for p in pixels if p != (255, 255, 255))
-        assert non_white < len(pixels) * 0.01, f"Too many non-white pixels: {non_white}"
+        raw = img.tobytes()
+        total_pixels = len(raw) // 3
+        non_white = sum(1 for i in range(0, len(raw), 3) if (raw[i], raw[i+1], raw[i+2]) != (255, 255, 255))
+        assert non_white < total_pixels * 0.01, f"Too many non-white pixels: {non_white}"
 
     @skip_mcp
     def test_diff_missing_path_a_returns_error(self, test_image_path):
