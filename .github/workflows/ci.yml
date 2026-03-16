@@ -2,6 +2,7 @@
 name: aichat CI
 on:
   push:
+    branches: [main]
     tags:
       - v*.*.*
       - v*
@@ -129,58 +130,3 @@ jobs:
           MINIO_ROOT_PASSWORD: ci_placeholder
           POSTGRES_PASSWORD: ci_placeholder
         run: command -v docker >/dev/null && docker compose version >/dev/null 2>&1 && docker compose build aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp || echo 'docker compose not available — skipping build'
-  integration:
-    name: Integration
-    runs-on: [self-hosted, unified-all]
-    needs: test
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: "Integration: static-analysis"
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          echo 'Integration batch: static-analysis'
-      - name: "Integration: regression"
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          echo 'Integration batch: regression'
-      - name: "Integration: image-builds"
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          echo 'Integration batch: image-builds'
-      - name: "Integration: smoke-tests"
-        shell: bash
-        timeout-minutes: 30
-        run: |
-          echo 'Integration batch: smoke-tests'
-  release:
-    name: Release
-    runs-on: [self-hosted, unified-all]
-    needs:
-      - test
-      - security
-    if: startsWith(github.ref, 'refs/tags/')
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Generate checksums
-        shell: bash
-        timeout-minutes: 5
-        run: cd release-assets && sha256sum * > SHA256SUMS
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: release-assets/*
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: release-assets/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
