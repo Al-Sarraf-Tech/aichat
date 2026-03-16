@@ -51,9 +51,11 @@ smoke:
 	  [aichat-sandbox]=8095 \
 	  [aichat-mcp]=8096 \
 	  [aichat-searxng]=8098 \
+	  [aichat-minio]=9002 \
 	); \
 	declare -A HEALTH_PATHS=( \
 	  [aichat-searxng]="/" \
+	  [aichat-minio]="/minio/health/live" \
 	); \
 	for svc in "$${!PORTS[@]}"; do \
 	  port=$${PORTS[$$svc]}; \

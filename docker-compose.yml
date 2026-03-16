@@ -210,6 +210,21 @@ services:
       IMAGE_GEN_BASE_URL: ${IMAGE_GEN_BASE_URL:-http://192.168.50.2:1234}
       IMAGE_GEN_MODEL:  "${IMAGE_GEN_MODEL:-}"
       EMBED_MODEL: "${EMBED_MODEL:-}"
+      # MinIO S3-compatible object store for image pipeline
+      MINIO_URL: http://aichat-minio:9002
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+      # CLIP embedding endpoint (aichat-vision)
+      CLIP_URL: http://aichat-vision:8099/clip
+      # Browser automation service
+      BROWSER_AUTO_URL: http://aichat-browser:8104
+      # Object/human detection
+      DETECT_URL: http://aichat-vision:8099/detect
+      # Optional: anime pipeline source API keys
+      PIXIV_REFRESH_TOKEN: "${PIXIV_REFRESH_TOKEN:-}"
+      SAUCENAO_API_KEY: "${SAUCENAO_API_KEY:-}"
+      DANBOORU_API_KEY: "${DANBOORU_API_KEY:-}"
+      DANBOORU_LOGIN: "${DANBOORU_LOGIN:-}"
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
     extra_hosts:
@@ -229,6 +244,10 @@ services:
       aichat-vector:
         condition: service_started
       aichat-searxng:
+        condition: service_healthy
+      aichat-minio:
+        condition: service_healthy
+      aichat-browser:
         condition: service_healthy
       aichat-jupyter:
         condition: service_healthy
@@ -298,8 +317,43 @@ services:
       timeout: 5s
       retries: 3
 
+  # ---------------------------------------------------------------------------
+  # aichat-browser: headless Chromium with full keyboard/mouse (port 8104)
+  #   Playwright-based, agentic browsing — navigate, click, type, screenshot.
+  #   No external API keys needed.
+  # ---------------------------------------------------------------------------
+  aichat-browser:
+    build: ./docker/browser
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8104/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Infrastructure: MinIO S3-compatible object store (ports 9001/9002)
+  #   Console: http://localhost:9001  |  API: http://localhost:9002
+  #   Used by the anime image pipeline to store downloaded images as objects.
+  # ---------------------------------------------------------------------------
+  aichat-minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001" --address ":9002"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in .env}
+    volumes:
+      - miniodata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9002/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
 volumes:
   aichatdb:       # PostgreSQL data
   datadb:         # aichat-data: SQLite stores (memory, graph, planner, jobs)
   qdrantdb:       # Qdrant vector storage
   whatsappauth:   # WhatsApp session credentials
+  miniodata:      # MinIO object storage

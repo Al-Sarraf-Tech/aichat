@@ -20,7 +20,6 @@ import time
 import httpx
 from PIL import Image
 
-
 DEFAULT_URL = "http://localhost:8097"
 DEFAULT_ITERATIONS = 10
 

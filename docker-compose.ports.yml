@@ -40,3 +40,12 @@ services:
   aichat-whatsapp:
     ports:
       - "8097:8097"
+
+  aichat-minio:
+    ports:
+      - "9001:9001"   # MinIO console
+      - "9002:9002"   # MinIO S3 API
+
+  aichat-browser:
+    ports:
+      - "8104:8104"   # Browser automation API

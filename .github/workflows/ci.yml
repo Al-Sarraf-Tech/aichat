@@ -21,7 +21,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -40,7 +40,7 @@ jobs:
         run: ruff check .
   test:
     name: Test
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs: lint
     timeout-minutes: 30
     steps:
@@ -67,7 +67,7 @@ jobs:
         run: pytest -v
   security:
     name: Security
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs: lint
     timeout-minutes: 30
     steps:
@@ -107,7 +107,7 @@ jobs:
         run: semgrep --config=auto --error .
   sbom:
     name: SBOM
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs: test
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 15
@@ -126,7 +126,7 @@ jobs:
           retention-days: 90
   docker:
     name: Docker Build
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs: test
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 45
@@ -139,7 +139,7 @@ jobs:
         run: docker compose build aichat-db aichat-database aichat-researchbox aichat-memory aichat-toolkit aichat-mcp
   integration:
     name: Integration
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs: test
     timeout-minutes: 60
     steps:
@@ -163,7 +163,7 @@ jobs:
         run: smoke-tests
   release:
     name: Release
-    runs-on: [self-hosted, gentoo]
+    runs-on: [self-hosted, unified-all]
     needs:
       - test
       - security

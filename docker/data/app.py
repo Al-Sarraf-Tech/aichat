@@ -107,9 +107,17 @@ def _create_pg_tables(pg: psycopg.Connection) -> None:
         )
     """)
     # Migrate existing deployments — add new columns if absent
-    for _col, _type in [("subject", "TEXT"), ("phash", "TEXT"), ("quality_score", "REAL")]:
+    for _col, _type in [
+        ("subject", "TEXT"),
+        ("phash", "TEXT"),
+        ("quality_score", "REAL"),
+        ("minio_key", "TEXT"),
+        ("clip_embedded", "BOOLEAN DEFAULT FALSE"),
+        ("source", "TEXT"),
+        ("tags", "TEXT"),
+    ]:
         try:
-            pg.execute(f"ALTER TABLE images ADD COLUMN IF NOT EXISTS {_col} {_type}")
+            pg.execute(f"ALTER TABLE images ADD COLUMN IF NOT EXISTS {_col} {_type}")  # noqa: S608
         except Exception:
             pass
     pg.execute("""

@@ -16,6 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /app
+
+# Nagadomi's LBP cascade trained on anime/manga faces — the standard for
+# illustrated-face detection with OpenCV.  Bundled at build time so there
+# is no runtime network dependency.
+ADD https://raw.githubusercontent.com/nagadomi/lbpcascade_animeface/master/lbpcascade_animeface.xml \
+    /app/lbpcascade_animeface.xml
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt

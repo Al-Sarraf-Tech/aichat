@@ -714,6 +714,44 @@ IMAGE_GEN_MODEL    = os.environ.get("IMAGE_GEN_MODEL", "")
 _EMBED_MODEL_OVERRIDE = os.environ.get("EMBED_MODEL", "")
 _embed_model_cache: str | None = None  # cached after first auto-detection
 
+# MinIO S3-compatible object store
+MINIO_URL       = os.environ.get("MINIO_URL", "http://aichat-minio:9002")
+MINIO_ACCESS    = os.environ.get("MINIO_ROOT_USER", "minioadmin")
+MINIO_SECRET    = os.environ.get("MINIO_ROOT_PASSWORD", "")
+CLIP_URL        = os.environ.get("CLIP_URL", "http://aichat-vision:8099/clip")
+BROWSER_AUTO_URL = os.environ.get("BROWSER_AUTO_URL", "http://aichat-browser:8104")
+DETECT_URL       = os.environ.get("DETECT_URL", "http://aichat-vision:8099/detect")
+_MINIO_BUCKET   = "aichat-images"
+
+# Anime pipeline source API keys (all optional)
+PIXIV_REFRESH_TOKEN = os.environ.get("PIXIV_REFRESH_TOKEN", "").strip()
+SAUCENAO_API_KEY    = os.environ.get("SAUCENAO_API_KEY", "").strip()
+DANBOORU_API_KEY    = os.environ.get("DANBOORU_API_KEY", "").strip()
+DANBOORU_LOGIN      = os.environ.get("DANBOORU_LOGIN", "").strip()
+
+# Lazy-initialized MinIO client
+_minio_client = None
+
+def _get_minio():
+    """Lazy-initialize the MinIO client and ensure the bucket exists."""
+    global _minio_client
+    if _minio_client is not None:
+        return _minio_client
+    try:
+        from minio import Minio  # noqa: E402
+        endpoint = MINIO_URL.replace("http://", "").replace("https://", "")
+        _minio_client = Minio(
+            endpoint,
+            access_key=MINIO_ACCESS,
+            secret_key=MINIO_SECRET,
+            secure=MINIO_URL.startswith("https"),
+        )
+        if not _minio_client.bucket_exists(_MINIO_BUCKET):
+            _minio_client.make_bucket(_MINIO_BUCKET)
+        return _minio_client
+    except Exception:
+        return None
+
 async def _get_embed_model() -> str:
     """Return the embedding model to use. Prefers EMBED_MODEL env, then auto-detects from LM Studio."""
     global _embed_model_cache
@@ -1531,9 +1569,10 @@ _TOOLS: list[dict[str, Any]] = [
         "description": (
             "Detect faces in an image and optionally compare them against a reference face. "
             "Returns an annotated image with face boxes and a text summary. "
-            "Works on real photos and anime/illustration artwork. "
-            "For anime, cartoon, or illustrated characters set style='anime' — this lowers "
-            "detection thresholds and enables extra cascades tuned for stylized faces. "
+            "Works on real photos AND anime/illustration/manga/game artwork. "
+            "For anime, cartoon, or illustrated characters set style='anime' — this uses "
+            "a dedicated anime-face cascade (lbpcascade_animeface) trained on illustrated "
+            "faces, with multi-pass retry and YOLO person-detection fallback. "
             "Use this for people-photo triage, frame inspection, and basic same-person checks."
         ),
         "inputSchema": {
@@ -1558,8 +1597,9 @@ _TOOLS: list[dict[str, Any]] = [
                     "enum": ["auto", "anime"],
                     "description": (
                         "Detection style preset. 'auto' (default) uses standard Haar cascade "
-                        "parameters suited for real photographs. 'anime' uses more permissive "
-                        "thresholds and additional cascades for anime/cartoon/illustration images."
+                        "parameters suited for real photographs. 'anime' uses the dedicated "
+                        "lbpcascade_animeface model trained on anime/manga/game artwork, with "
+                        "multi-pass retry and YOLO person-detection fallback."
                     ),
                 },
                 "match_threshold": {
@@ -2368,6 +2408,28 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["url"],
         },
     },
+    {
+        "name": "video_transcode",
+        "description": (
+            "Transcode a video using Intel Arc GPU hardware acceleration (VA-API). "
+            "Supports H.264, HEVC, VP9, and AV1 encoding. "
+            "Use for format conversion, resolution scaling, or bitrate reduction. "
+            "Output is saved to the workspace directory."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url":      {"type": "string",  "description": "HTTP/HTTPS URL or workspace path of the video."},
+                "codec":    {"type": "string",  "description": "Target codec: h264, hevc, vp9, or av1 (default h264).",
+                             "enum": ["h264", "hevc", "vp9", "av1"]},
+                "bitrate":  {"type": "string",  "description": "Target bitrate (default '5M'). E.g. '2M', '8M', '500K'."},
+                "width":    {"type": "integer", "description": "Target width (0 = keep original, -2 = auto-scale)."},
+                "height":   {"type": "integer", "description": "Target height (0 = keep original, -2 = auto-scale)."},
+                "filename": {"type": "string",  "description": "Output filename (optional, auto-generated if omitted)."},
+            },
+            "required": ["url"],
+        },
+    },
     # ── OCR ─────────────────────────────────────────────────────────────────
     {
         "name": "ocr_image",
@@ -3092,6 +3154,206 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["code"],
         },
     },
+    # ------------------------------------------------------------------
+    # Anime / image pipeline tools
+    # ------------------------------------------------------------------
+    {
+        "name": "anime_search",
+        "description": "Search anime/game character images across Danbooru and Bing. Returns deduplicated inline images.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query":   {"type": "string", "description": "Character or tag search query"},
+                "sources": {"type": "array", "items": {"type": "string"}, "description": "Sources: danbooru, searxng, pixiv. Default: [danbooru, searxng]"},
+                "count":   {"type": "integer", "description": "Max images per source (1-30, default 8)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "anime_pipeline",
+        "description": "Full image pipeline: search → dedupe → store in MinIO → CLIP embed → Qdrant index. Returns summary.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query":      {"type": "string", "description": "Character or tag search query"},
+                "sources":    {"type": "array", "items": {"type": "string"}, "description": "Sources: danbooru, searxng, pixiv. Default: [danbooru, searxng]"},
+                "count":      {"type": "integer", "description": "Max images per source (1-30, default 8)"},
+                "auto_embed": {"type": "boolean", "description": "CLIP-embed each image into Qdrant (default true)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "image_similarity_search",
+        "description": "Semantic image search using CLIP embeddings. Find visually similar images stored in Qdrant.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query":     {"type": "string", "description": "Text description or image URL to search by"},
+                "top_k":     {"type": "integer", "description": "Number of results (default 5)"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "saucenao_search",
+        "description": "Reverse image search via SauceNAO. Find the source of an image (Pixiv, Danbooru, etc.).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_url": {"type": "string", "description": "URL of the image to reverse-search"},
+            },
+            "required": ["image_url"],
+        },
+    },
+    {
+        "name": "list_tools_by_category",
+        "description": "List available tools filtered by category. Call this when unsure which tool to use.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Category: anime, vision, browser, search, memory, code, documents, media, vector, planner, database, jobs, utility"},
+                "search":   {"type": "string", "description": "Keyword search across tool names and descriptions"},
+            },
+        },
+    },
+    # ------------------------------------------------------------------
+    # Browser automation tools (aichat-browser)
+    # ------------------------------------------------------------------
+    {
+        "name": "browser_navigate",
+        "description": "Navigate to a URL in headless Chromium. Returns screenshot + page info.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to navigate to"},
+                "wait_until": {"type": "string", "description": "Wait event: domcontentloaded, load, networkidle. Default: domcontentloaded"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_click",
+        "description": "Click on a page element by CSS selector or coordinates.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector to click"},
+                "x": {"type": "number", "description": "X coordinate to click"},
+                "y": {"type": "number", "description": "Y coordinate to click"},
+                "button": {"type": "string", "description": "Mouse button: left, right, middle. Default: left"},
+            },
+        },
+    },
+    {
+        "name": "browser_type",
+        "description": "Type text into the page or a specific element.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to type"},
+                "selector": {"type": "string", "description": "CSS selector to type into (optional — types into focused element if omitted)"},
+                "clear_first": {"type": "boolean", "description": "Clear the field before typing (default false)"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "browser_screenshot_page",
+        "description": "Take a screenshot of the current browser page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "full_page": {"type": "boolean", "description": "Capture full scrollable page (default false)"},
+                "selector": {"type": "string", "description": "CSS selector to screenshot a specific element"},
+            },
+        },
+    },
+    {
+        "name": "browser_extract",
+        "description": "Extract text, links, or images from the current page.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string", "description": "What to extract: text, links, images"},
+            },
+            "required": ["what"],
+        },
+    },
+    {
+        "name": "browser_keyboard",
+        "description": "Press keyboard keys: Enter, Tab, Escape, ArrowDown, Backspace, etc.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Key to press (e.g. Enter, Tab, Escape, ArrowDown)"},
+            },
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "browser_fill_form",
+        "description": "Fill multiple form fields at once.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "fields": {"type": "array", "items": {"type": "object", "properties": {"selector": {"type": "string"}, "value": {"type": "string"}}}, "description": "Array of {selector, value} to fill"},
+            },
+            "required": ["fields"],
+        },
+    },
+    {
+        "name": "browser_scroll",
+        "description": "Scroll the page down/up or to a specific element.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "direction": {"type": "string", "description": "Scroll direction: down, up. Default: down"},
+                "amount": {"type": "integer", "description": "Pixels to scroll (default 500)"},
+                "selector": {"type": "string", "description": "CSS selector to scroll into view"},
+            },
+        },
+    },
+    {
+        "name": "browser_evaluate",
+        "description": "Execute JavaScript on the current page and return the result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expression": {"type": "string", "description": "JavaScript expression to evaluate"},
+            },
+            "required": ["expression"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # Object/human detection tools
+    # ------------------------------------------------------------------
+    {
+        "name": "detect_objects",
+        "description": "Detect objects in an image using YOLOv8n (80 classes: person, car, dog, etc.). No API key needed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_base64": {"type": "string", "description": "Base64-encoded image"},
+                "image_url": {"type": "string", "description": "URL of image to analyze"},
+                "confidence": {"type": "number", "description": "Min confidence threshold (0-1, default 0.25)"},
+                "classes": {"type": "array", "items": {"type": "string"}, "description": "Filter to specific classes (e.g. ['person', 'car'])"},
+            },
+        },
+    },
+    {
+        "name": "detect_humans",
+        "description": "Detect people/humans in an image. Returns bounding boxes and count.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_base64": {"type": "string", "description": "Base64-encoded image"},
+                "image_url": {"type": "string", "description": "URL of image to analyze"},
+                "confidence": {"type": "number", "description": "Min confidence (0-1, default 0.3)"},
+            },
+        },
+    },
 ]
 
 # -----------------------------------------------------------------------
@@ -3523,6 +3785,40 @@ def _pil_to_blocks(
     return _renderer.encode(img, summary, save_prefix=save_prefix, quality=quality)
 
 
+_ANIME_CASCADE_PATH = "/app/lbpcascade_animeface.xml"
+
+
+def _run_cascades(
+    gray: Any,
+    cascade_paths: list[str],
+    sf: float,
+    mn: int,
+    msz: int,
+    seen: set[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """Run a list of cascade classifiers and return deduplicated (x,y,w,h) boxes."""
+    parsed: list[tuple[int, int, int, int]] = []
+    for cascade_path in cascade_paths:
+        if not os.path.exists(cascade_path):
+            continue
+        detector = _cv2.CascadeClassifier(cascade_path)  # type: ignore[union-attr]
+        if detector.empty():
+            continue
+        raw = detector.detectMultiScale(gray, scaleFactor=sf, minNeighbors=mn, minSize=(msz, msz))
+        for (x, y, w, h) in list(raw):  # type: ignore[assignment]
+            box = (int(x), int(y), int(w), int(h))
+            cx, cy = box[0] + box[2] // 2, box[1] + box[3] // 2
+            dup = False
+            for (ex, ey, ew, eh) in seen:
+                if abs(cx - (ex + ew // 2)) < ew * 0.3 and abs(cy - (ey + eh // 2)) < eh * 0.3:
+                    dup = True
+                    break
+            if not dup:
+                seen.add(box)
+                parsed.append(box)
+    return parsed
+
+
 def _detect_faces(
     img: "_PilImage.Image",
     *,
@@ -3531,12 +3827,16 @@ def _detect_faces(
     scale_factor: float = 1.1,
     anime: bool = False,
 ) -> list[tuple[int, int, int, int]]:
-    """Detect faces via OpenCV Haar cascade and return sorted (x, y, w, h) boxes.
+    """Detect faces via OpenCV cascades and return sorted (x, y, w, h) boxes.
 
-    When *anime* is True, uses more permissive parameters suited to illustrated/
-    anime-style faces: tighter scale steps, fewer required neighbors, smaller
-    minimum face size, and an additional LBP profile-face pass to catch
-    non-frontal faces that the frontal Haar cascade misses.
+    When *anime* is True the dedicated ``lbpcascade_animeface`` cascade
+    (trained on anime/manga/illustration faces by nagadomi) is used as the
+    primary detector.  Standard Haar cascades serve as fallback, and an
+    ultra-permissive retry pass runs automatically if the first pass finds
+    nothing.
+
+    For real photos (anime=False), the standard Haar cascades run first.
+    If nothing is found a second, more permissive pass is attempted.
     """
     if not _HAS_CV2 or _cv2 is None or _np is None:
         return []
@@ -3564,48 +3864,93 @@ def _detect_faces(
     haarcascades_dir = getattr(_cv2.data, "haarcascades", "")
     lbpcascades_dir  = getattr(_cv2.data, "lbpcascades", "")
 
-    # Cascades to try, in priority order.  The LBP profile cascade is cheap
-    # and catches side-facing anime faces that the frontal Haar misses.
-    cascade_names: list[tuple[str, str]] = [
-        (haarcascades_dir, "haarcascade_frontalface_default.xml"),
-        (haarcascades_dir, "haarcascade_frontalface_alt2.xml"),
-    ]
+    # -- build cascade list by mode ------------------------------------
     if anime:
-        cascade_names += [
-            (lbpcascades_dir, "lbpcascade_profileface.xml"),
-            (haarcascades_dir, "haarcascade_profileface.xml"),
+        # Anime-specific cascade first (trained on anime/manga faces),
+        # then standard cascades + profile cascades as backup.
+        cascade_paths: list[str] = []
+        if os.path.exists(_ANIME_CASCADE_PATH):
+            cascade_paths.append(_ANIME_CASCADE_PATH)
+        cascade_paths.extend([
+            os.path.join(haarcascades_dir, "haarcascade_frontalface_default.xml"),
+            os.path.join(haarcascades_dir, "haarcascade_frontalface_alt2.xml"),
+            os.path.join(lbpcascades_dir, "lbpcascade_profileface.xml"),
+            os.path.join(haarcascades_dir, "haarcascade_profileface.xml"),
+        ])
+    else:
+        cascade_paths = [
+            os.path.join(haarcascades_dir, "haarcascade_frontalface_default.xml"),
+            os.path.join(haarcascades_dir, "haarcascade_frontalface_alt2.xml"),
         ]
-
-    seen: set[tuple[int, int, int, int]] = set()
-    parsed: list[tuple[int, int, int, int]] = []
 
     sf  = max(1.01, min(scale_factor, 1.5))
     mn  = max(1, min(min_neighbors, 12))
     msz = max(12, min_face_size)
 
-    for base_dir, xml_name in cascade_names:
-        cascade_path = os.path.join(base_dir, xml_name)
-        if not os.path.exists(cascade_path):
-            continue
-        detector = _cv2.CascadeClassifier(cascade_path)  # type: ignore[union-attr]
-        if detector.empty():
-            continue
-        raw = detector.detectMultiScale(gray, scaleFactor=sf, minNeighbors=mn, minSize=(msz, msz))
-        for (x, y, w, h) in list(raw):  # type: ignore[assignment]
-            box = (int(x), int(y), int(w), int(h))
-            # Deduplicate: skip if centre is within 30 % of an existing box
-            cx, cy = box[0] + box[2] // 2, box[1] + box[3] // 2
-            dup = False
-            for (ex, ey, ew, eh) in seen:
-                if abs(cx - (ex + ew // 2)) < ew * 0.3 and abs(cy - (ey + eh // 2)) < eh * 0.3:
-                    dup = True
-                    break
-            if not dup:
-                seen.add(box)
-                parsed.append(box)
+    seen: set[tuple[int, int, int, int]] = set()
+    parsed = _run_cascades(gray, cascade_paths, sf, mn, msz, seen)
+
+    # -- retry with ultra-permissive params if first pass found nothing -
+    if not parsed:
+        retry_sf  = 1.02 if anime else 1.05
+        retry_mn  = 1
+        retry_msz = 12 if anime else 20
+        parsed = _run_cascades(gray, cascade_paths, retry_sf, retry_mn, retry_msz, seen)
+
+    # -- anime: also try on un-equalized grayscale (some art has flat
+    #    histograms that equalizeHist distorts, hurting cascade detection) -
+    if anime and not parsed:
+        try:
+            gray_raw = _cv2.cvtColor(arr, _cv2.COLOR_RGB2GRAY)  # type: ignore[union-attr]
+            parsed = _run_cascades(gray_raw, cascade_paths, 1.02, 1, 12, seen)
+        except Exception:
+            pass
 
     parsed.sort(key=lambda box: box[2] * box[3], reverse=True)
     return parsed
+
+
+async def _detect_faces_yolo_fallback(
+    img: "_PilImage.Image",
+) -> list[tuple[int, int, int, int]]:
+    """Fallback face detection via YOLO person detection from the vision service.
+
+    Calls aichat-vision /detect/humans, then estimates face regions as the
+    upper portion of each detected person bounding box.  This catches faces
+    that cascade classifiers miss entirely (heavily stylized art, unusual
+    angles, non-standard proportions).
+    """
+    if _np is None:
+        return []
+    buf = _io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=85)
+    b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                "http://aichat-vision:8099/detect/humans",
+                json={"image_base64": b64, "confidence": 0.25},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return []
+
+    faces: list[tuple[int, int, int, int]] = []
+    for person in data.get("people", []):
+        bbox = person.get("bbox", {})
+        x1, y1 = int(bbox.get("x1", 0)), int(bbox.get("y1", 0))
+        x2, y2 = int(bbox.get("x2", 0)), int(bbox.get("y2", 0))
+        pw, ph = x2 - x1, y2 - y1
+        if pw < 20 or ph < 30:
+            continue
+        # Estimate face as upper ~25% of person bbox, narrowed to ~85% width
+        face_h = int(ph * 0.25)
+        face_w = min(pw, int(face_h * 0.85))
+        face_x = x1 + (pw - face_w) // 2
+        face_y = y1
+        faces.append((face_x, face_y, face_w, face_h))
+    return faces
 
 
 def _face_embedding(
@@ -5949,16 +6294,31 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     scale_factor=scale_factor,
                     anime=anime_mode,
                 )
+                detection_method = "cascade"
+
+                # YOLO person-detection fallback when cascades find nothing
+                if not faces:
+                    try:
+                        yolo_faces = await _detect_faces_yolo_fallback(img)
+                        if yolo_faces:
+                            faces = yolo_faces
+                            detection_method = "yolo-person-fallback"
+                    except Exception:
+                        pass
+
                 out_img = img.copy()
                 style_label = "anime" if anime_mode else "auto"
+                anime_cascade_ok = os.path.exists(_ANIME_CASCADE_PATH)
                 lines = [
                     f"Detected {len(faces)} face(s) in {os.path.basename(path)} "
-                    f"(style={style_label}, min_face_size={min_face_size}px, "
+                    f"(style={style_label}, method={detection_method}, "
+                    f"min_face_size={min_face_size}px, "
                     f"min_neighbors={min_neighbors}, scale_factor={scale_factor:.2f}).",
                     (
                         f"Vision backend: {_GpuImg.backend()}  "
                         f"(OpenCL={'on' if _CV2_ACCEL_STATUS.get('opencl_use') else 'off'}, "
-                        f"CUDA devices={int(_CV2_ACCEL_STATUS.get('cuda_devices', 0))})"
+                        f"CUDA devices={int(_CV2_ACCEL_STATUS.get('cuda_devices', 0))}, "
+                        f"anime_cascade={'loaded' if anime_cascade_ok else 'missing'})"
                     ),
                 ]
                 if len(faces) == 0 and not anime_mode:
@@ -8336,6 +8696,34 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                               f"{d_vt.get('width')}×{d_vt.get('height')} from {url_vt}")
                 return _renderer.encode_url_bytes(raw_vt, "image/png", summary_vt)
 
+            if name == "video_transcode":
+                url_xt   = str(args.get("url", "")).strip()
+                codec_xt = str(args.get("codec", "h264")).strip()
+                br_xt    = str(args.get("bitrate", "5M")).strip()
+                w_xt     = int(args.get("width", 0))
+                h_xt     = int(args.get("height", 0))
+                fn_xt    = str(args.get("filename", "")).strip()
+                if not url_xt:
+                    return _text("video_transcode: 'url' is required")
+                try:
+                    r_xt = await c.post(
+                        f"{VIDEO_URL}/transcode",
+                        json={"url": url_xt, "codec": codec_xt, "bitrate": br_xt,
+                              "width": w_xt, "height": h_xt, "filename": fn_xt},
+                        timeout=600,
+                    )
+                    r_xt.raise_for_status()
+                    d_xt = r_xt.json()
+                except Exception as exc:
+                    return _text(f"video_transcode: failed — {exc}")
+                gpu_tag = "GPU (VA-API)" if d_xt.get("gpu_accelerated") else "CPU"
+                return _text(
+                    f"Transcoded {url_xt} → {d_xt.get('path')}\n"
+                    f"  Codec: {d_xt.get('codec')}  Encoder: {gpu_tag}\n"
+                    f"  Resolution: {d_xt.get('width')}×{d_xt.get('height')}\n"
+                    f"  Duration: {d_xt.get('duration_s')}s  Size: {d_xt.get('size_mb')} MB"
+                )
+
             # ----------------------------------------------------------------
             # OCR tools
             # ----------------------------------------------------------------
@@ -9461,6 +9849,706 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     return blocks_jup
                 except Exception as exc_jup:
                     return _text(f"jupyter_exec: {exc_jup}")
+
+            # ================================================================
+            # anime_search — multi-source anime image search
+            # ================================================================
+            if name == "anime_search":
+                aq = str(args.get("query", "")).strip()
+                if not aq:
+                    return _text("anime_search: 'query' is required")
+                a_sources = args.get("sources") or ["danbooru", "searxng"]
+                a_count = max(1, min(int(args.get("count", 8)), 30))
+                results: list[dict] = []
+                seen_hashes_a: list[str] = []
+
+                # --- Danbooru (public, no auth) ---
+                if "danbooru" in a_sources:
+                    try:
+                        dan_url = "https://danbooru.donmai.us/posts.json"
+                        # Danbooru uses underscore-separated tags.
+                        # Multi-word queries: try as single tag first (space→underscore),
+                        # which works for names like "hatsune_miku", "saber_(fate)".
+                        dan_tags = aq.strip()
+                        # If query has parentheses, pass as-is (user knows tag format)
+                        if "(" not in dan_tags:
+                            dan_tags = dan_tags.replace(" ", "_")
+                        dan_params: dict[str, Any] = {
+                            "tags": dan_tags,
+                            "limit": a_count,
+                        }
+                        if DANBOORU_LOGIN and DANBOORU_API_KEY:
+                            dan_params["login"] = DANBOORU_LOGIN
+                            dan_params["api_key"] = DANBOORU_API_KEY
+                        dr = await c.get(dan_url, params=dan_params, timeout=15)
+                        if dr.status_code == 200:
+                            for post in dr.json():
+                                file_url = post.get("large_file_url") or post.get("file_url", "")
+                                if not file_url:
+                                    continue
+                                if not file_url.startswith("http"):
+                                    file_url = f"https://danbooru.donmai.us{file_url}"
+                                results.append({
+                                    "url": file_url,
+                                    "source": "danbooru",
+                                    "tags": post.get("tag_string", ""),
+                                    "id": post.get("id"),
+                                    "score": post.get("score", 0),
+                                })
+                    except Exception as e_dan:
+                        results.append({"error": f"danbooru: {e_dan}", "source": "danbooru"})
+
+                # --- SearXNG/Bing images (already available) ---
+                if "searxng" in a_sources or "bing" in a_sources:
+                    try:
+                        sx_params = {"q": f"{aq} anime", "categories": "images", "format": "json"}
+                        sr = await c.get(f"{SEARXNG_URL}/search", params=sx_params, timeout=15)
+                        if sr.status_code == 200:
+                            for item in sr.json().get("results", [])[:a_count]:
+                                img_src = item.get("img_src") or item.get("url", "")
+                                if img_src:
+                                    results.append({
+                                        "url": img_src,
+                                        "source": "searxng",
+                                        "title": item.get("title", ""),
+                                    })
+                    except Exception as e_sx:
+                        results.append({"error": f"searxng: {e_sx}", "source": "searxng"})
+
+                # --- Pixiv (optional, needs refresh token) ---
+                if "pixiv" in a_sources and PIXIV_REFRESH_TOKEN:
+                    try:
+                        # Refresh OAuth token
+                        token_r = await c.post(
+                            "https://oauth.secure.pixiv.net/auth/token",
+                            data={
+                                "client_id": "MOBrBDS8blbauoSck0ZfDbtuzpyT",
+                                "client_secret": "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj",
+                                "grant_type": "refresh_token",
+                                "refresh_token": PIXIV_REFRESH_TOKEN,
+                            },
+                            headers={"User-Agent": "PixivAndroidApp/5.0.234"},
+                            timeout=15,
+                        )
+                        if token_r.status_code == 200:
+                            access_token = token_r.json().get("access_token", "")
+                            pixiv_r = await c.get(
+                                "https://app-api.pixiv.net/v1/search/illust",
+                                params={"word": aq, "sort": "popular_desc", "search_target": "partial_match_for_tags"},
+                                headers={
+                                    "Authorization": f"Bearer {access_token}",
+                                    "User-Agent": "PixivAndroidApp/5.0.234",
+                                },
+                                timeout=15,
+                            )
+                            if pixiv_r.status_code == 200:
+                                for illust in pixiv_r.json().get("illusts", [])[:a_count]:
+                                    img_url = (illust.get("image_urls", {}).get("large")
+                                               or illust.get("image_urls", {}).get("medium", ""))
+                                    if img_url:
+                                        tags_px = ", ".join(t.get("name", "") for t in illust.get("tags", []))
+                                        results.append({
+                                            "url": img_url,
+                                            "source": "pixiv",
+                                            "title": illust.get("title", ""),
+                                            "artist": illust.get("user", {}).get("name", ""),
+                                            "tags": tags_px,
+                                        })
+                    except Exception as e_px:
+                        results.append({"error": f"pixiv: {e_px}", "source": "pixiv"})
+
+                # Deduplicate by downloading + dHash
+                unique_results: list[dict] = []
+                blocks_anime: list[dict] = []
+                for r_item in results:
+                    if r_item.get("error"):
+                        continue
+                    img_url_a = r_item.get("url", "")
+                    if not img_url_a:
+                        continue
+                    try:
+                        dl_headers = dict(_BROWSER_HEADERS)
+                        img_bytes_a: bytes = b""
+                        ct = "image/jpeg"
+                        # Danbooru CDN + Pixiv use Cloudflare — need TLS impersonation
+                        if "donmai.us" in img_url_a:
+                            dl_headers["Referer"] = "https://danbooru.donmai.us/"
+                        elif "pximg.net" in img_url_a:
+                            dl_headers["Referer"] = "https://www.pixiv.net/"
+                        # Use curl_cffi for Cloudflare-protected CDNs (impersonates Chrome TLS)
+                        if "donmai.us" in img_url_a or "pximg.net" in img_url_a:
+                            try:
+                                from curl_cffi.requests import AsyncSession  # noqa: E402
+                                async with AsyncSession(impersonate="chrome") as cf_sess:
+                                    cf_r = await cf_sess.get(img_url_a, headers=dl_headers, timeout=15, allow_redirects=True)
+                                    if cf_r.status_code != 200:
+                                        continue
+                                    img_bytes_a = cf_r.content
+                                    ct = cf_r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                            except Exception:
+                                continue
+                        else:
+                            img_r = await c.get(img_url_a, headers=dl_headers, follow_redirects=True, timeout=15)
+                            if img_r.status_code != 200:
+                                continue
+                            img_bytes_a = img_r.content
+                            ct = img_r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+                        if not img_bytes_a:
+                            continue
+                        if _HAS_PIL:
+                            pil_a = _PilImage.open(_io.BytesIO(img_bytes_a)).convert("RGB")
+                            h_a = _dhash(pil_a)
+                            if h_a and any(_hamming(h_a, sh) < 8 for sh in seen_hashes_a):
+                                continue  # duplicate
+                            if h_a:
+                                seen_hashes_a.append(h_a)
+                                r_item["phash"] = h_a
+                        b64_a = base64.standard_b64encode(img_bytes_a).decode("ascii")
+                        blocks_anime.append({"type": "image", "data": b64_a, "mimeType": ct})
+                        unique_results.append(r_item)
+                        if len(unique_results) >= a_count:
+                            break
+                    except Exception:
+                        continue
+
+                summary_a = (
+                    f"anime_search: {len(unique_results)} unique images for '{aq}'\n"
+                    f"Sources queried: {', '.join(a_sources)}\n"
+                    f"Total found: {len(results)}, after dedup: {len(unique_results)}"
+                )
+                return [{"type": "text", "text": summary_a}] + blocks_anime[:8]
+
+            # ================================================================
+            # anime_pipeline — full pipeline: search→dedupe→MinIO→CLIP→Qdrant
+            # ================================================================
+            if name == "anime_pipeline":
+                ap_query = str(args.get("query", "")).strip()
+                if not ap_query:
+                    return _text("anime_pipeline: 'query' is required")
+                ap_sources = args.get("sources") or ["danbooru", "searxng"]
+                ap_count = max(1, min(int(args.get("count", 8)), 30))
+                ap_embed = args.get("auto_embed", True)
+
+                # Step 1: Search (reuse anime_search logic via recursive call)
+                search_result = await _call_tool("anime_search", {
+                    "query": ap_query, "sources": ap_sources, "count": ap_count,
+                })
+                # Extract text summary to get result metadata
+                search_text = ""
+                image_blocks = []
+                for blk in search_result:
+                    if blk.get("type") == "text":
+                        search_text += blk.get("text", "")
+                    elif blk.get("type") == "image":
+                        image_blocks.append(blk)
+
+                stored_count = 0
+                embedded_count = 0
+                minio_keys: list[str] = []
+
+                mc = _get_minio()
+                for idx, img_blk in enumerate(image_blocks):
+                    img_data = base64.b64decode(img_blk.get("data", ""))
+                    if not img_data:
+                        continue
+
+                    # Compute hash for MinIO key
+                    if _HAS_PIL:
+                        pil_p = _PilImage.open(_io.BytesIO(img_data)).convert("RGB")
+                        p_hash = _dhash(pil_p)
+                    else:
+                        p_hash = uuid.uuid4().hex[:16]
+
+                    mime = img_blk.get("mimeType", "image/jpeg")
+                    ext_map = {"image/jpeg": "jpg", "image/png": "png",
+                               "image/webp": "webp", "image/gif": "gif"}
+                    ext = ext_map.get(mime, "jpg")
+                    subject = ap_query.replace(" ", "_").lower()[:50]
+                    minio_key = f"{subject}/{p_hash}.{ext}"
+
+                    # Step 2: Upload to MinIO
+                    if mc:
+                        try:
+                            mc.put_object(
+                                _MINIO_BUCKET, minio_key,
+                                _io.BytesIO(img_data), len(img_data),
+                                content_type=mime,
+                            )
+                            minio_keys.append(minio_key)
+                            stored_count += 1
+                        except Exception:
+                            pass
+
+                    # Step 3: Store metadata in PostgreSQL
+                    try:
+                        await c.post(f"{DATABASE_URL}/images/store", json={
+                            "url": f"minio://{_MINIO_BUCKET}/{minio_key}",
+                            "host_path": minio_key,
+                            "alt_text": ap_query,
+                            "subject": subject,
+                            "phash": p_hash,
+                            "minio_key": minio_key,
+                            "source": "anime_pipeline",
+                            "tags": ap_query,
+                        }, timeout=10)
+                    except Exception:
+                        pass
+
+                    # Step 4: CLIP embed → Qdrant
+                    if ap_embed:
+                        try:
+                            b64_for_clip = base64.standard_b64encode(img_data).decode("ascii")
+                            clip_r = await c.post(
+                                f"{CLIP_URL}/embed",
+                                json={"image_base64": b64_for_clip},
+                                timeout=30,
+                            )
+                            if clip_r.status_code == 200:
+                                clip_data = clip_r.json()
+                                embedding = clip_data.get("embedding", [])
+                                dim = len(embedding)
+                                if dim > 0:
+                                    # Ensure Qdrant collection exists
+                                    coll_check = await c.get(
+                                        f"{VECTOR_URL}/collections/images", timeout=5
+                                    )
+                                    if coll_check.status_code == 404:
+                                        await c.put(
+                                            f"{VECTOR_URL}/collections/images",
+                                            json={"vectors": {"size": dim, "distance": "Cosine"}},
+                                            timeout=10,
+                                        )
+                                    # Upsert vector
+                                    point_id = uuid.uuid5(uuid.NAMESPACE_URL, minio_key).int >> 64
+                                    await c.put(
+                                        f"{VECTOR_URL}/collections/images/points",
+                                        json={"points": [{
+                                            "id": point_id,
+                                            "vector": embedding,
+                                            "payload": {
+                                                "minio_key": minio_key,
+                                                "query": ap_query,
+                                                "source": "anime_pipeline",
+                                            },
+                                        }]},
+                                        timeout=15,
+                                    )
+                                    embedded_count += 1
+                        except Exception:
+                            pass
+
+                summary_p = (
+                    f"anime_pipeline complete for '{ap_query}':\n"
+                    f"  Images found: {len(image_blocks)}\n"
+                    f"  Stored in MinIO: {stored_count}\n"
+                    f"  CLIP-embedded in Qdrant: {embedded_count}\n"
+                    f"  MinIO bucket: {_MINIO_BUCKET}\n"
+                    f"  Qdrant collection: images (768-dim cosine)"
+                )
+                return [{"type": "text", "text": summary_p}] + image_blocks[:4]
+
+            # ================================================================
+            # image_similarity_search — CLIP-based semantic image search
+            # ================================================================
+            if name == "image_similarity_search":
+                iss_query = str(args.get("query", "")).strip()
+                iss_top_k = max(1, min(int(args.get("top_k", 5)), 20))
+                if not iss_query:
+                    return _text("image_similarity_search: 'query' is required")
+
+                # Get CLIP embedding for the query
+                embed_vec: list[float] = []
+                if iss_query.startswith("http://") or iss_query.startswith("https://"):
+                    # Image URL — get CLIP embedding from vision service
+                    try:
+                        cr = await c.post(f"{CLIP_URL}/embed", json={"image_url": iss_query}, timeout=30)
+                        if cr.status_code == 200:
+                            embed_vec = cr.json().get("embedding", [])
+                    except Exception as e_iss:
+                        return _text(f"image_similarity_search: CLIP embed failed: {e_iss}")
+                else:
+                    # Text query — use LM Studio text embedding
+                    try:
+                        em = await _get_embed_model()
+                        er = await c.post(
+                            f"{IMAGE_GEN_BASE_URL}/v1/embeddings",
+                            json={"input": iss_query, "model": em},
+                            timeout=30,
+                        )
+                        if er.status_code == 200:
+                            ed = er.json().get("data", [])
+                            if ed:
+                                embed_vec = ed[0]["embedding"]
+                    except Exception as e_iss2:
+                        return _text(f"image_similarity_search: text embed failed: {e_iss2}")
+
+                if not embed_vec:
+                    return _text("image_similarity_search: could not generate embedding")
+
+                # Search Qdrant
+                try:
+                    qs = await c.post(
+                        f"{VECTOR_URL}/collections/images/points/search",
+                        json={"vector": embed_vec, "limit": iss_top_k, "with_payload": True},
+                        timeout=10,
+                    )
+                    if qs.status_code == 404:
+                        return _text("image_similarity_search: no 'images' collection in Qdrant — run anime_pipeline first")
+                    qs.raise_for_status()
+                    hits = qs.json().get("result", [])
+                except Exception as e_qs:
+                    return _text(f"image_similarity_search: Qdrant error: {e_qs}")
+
+                if not hits:
+                    return _text("image_similarity_search: no similar images found")
+
+                # Fetch images from MinIO and return inline
+                blocks_iss: list[dict] = []
+                mc_iss = _get_minio()
+                for hit in hits:
+                    payload_h = hit.get("payload", {})
+                    score_h = hit.get("score", 0)
+                    mkey = payload_h.get("minio_key", "")
+                    blocks_iss.append({"type": "text", "text": (
+                        f"Score: {score_h:.4f} | Key: {mkey} | "
+                        f"Query: {payload_h.get('query', '')} | Source: {payload_h.get('source', '')}"
+                    )})
+                    if mc_iss and mkey:
+                        try:
+                            obj = mc_iss.get_object(_MINIO_BUCKET, mkey)
+                            img_bytes = obj.read()
+                            obj.close()
+                            obj.release_conn()
+                            b64_iss = base64.standard_b64encode(img_bytes).decode("ascii")
+                            blocks_iss.append({"type": "image", "data": b64_iss, "mimeType": "image/jpeg"})
+                        except Exception:
+                            pass
+
+                return [{"type": "text", "text": f"Found {len(hits)} similar images:"}] + blocks_iss
+
+            # ================================================================
+            # saucenao_search — reverse image search
+            # ================================================================
+            if name == "saucenao_search":
+                sn_url = str(args.get("image_url", "")).strip()
+                if not sn_url:
+                    return _text("saucenao_search: 'image_url' is required")
+                if not SAUCENAO_API_KEY:
+                    return _text("saucenao_search: SAUCENAO_API_KEY not configured in .env")
+                try:
+                    sn_r = await c.get(
+                        "https://saucenao.com/search.php",
+                        params={
+                            "api_key": SAUCENAO_API_KEY,
+                            "output_type": "2",  # JSON
+                            "url": sn_url,
+                            "numres": "10",
+                        },
+                        timeout=20,
+                    )
+                    sn_r.raise_for_status()
+                    sn_data = sn_r.json()
+                    sn_results = sn_data.get("results", [])
+                    if not sn_results:
+                        return _text("saucenao_search: no results found")
+                    lines_sn: list[str] = [f"SauceNAO results for {sn_url}:\n"]
+                    for i_sn, res_sn in enumerate(sn_results[:10], 1):
+                        header_sn = res_sn.get("header", {})
+                        data_sn = res_sn.get("data", {})
+                        sim = header_sn.get("similarity", "?")
+                        thumb = header_sn.get("thumbnail", "")
+                        title = data_sn.get("title", data_sn.get("source", "Unknown"))
+                        ext_urls = data_sn.get("ext_urls", [])
+                        lines_sn.append(
+                            f"{i_sn}. [{sim}%] {title}\n"
+                            f"   Sources: {', '.join(ext_urls[:3]) if ext_urls else 'N/A'}"
+                        )
+                    return _text("\n".join(lines_sn))
+                except Exception as e_sn:
+                    return _text(f"saucenao_search: {e_sn}")
+
+            # ================================================================
+            # browser_navigate — headless Chromium navigation
+            # ================================================================
+            if name == "browser_navigate":
+                bn_url = str(args.get("url", "")).strip()
+                if not bn_url:
+                    return _text("browser_navigate: 'url' is required")
+                try:
+                    bn_payload: dict[str, Any] = {"url": bn_url}
+                    if args.get("wait_until"):
+                        bn_payload["wait_until"] = args["wait_until"]
+                    br = await c.post(f"{BROWSER_AUTO_URL}/navigate", json=bn_payload, timeout=45)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bn: list[dict] = [{"type": "text", "text": f"Navigated to: {bd.get('url')}\nTitle: {bd.get('title')}"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bn.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bn
+                except Exception as e_bn:
+                    return _text(f"browser_navigate: {e_bn}")
+
+            # ================================================================
+            # browser_click — click on page element
+            # ================================================================
+            if name == "browser_click":
+                try:
+                    bc_payload: dict[str, Any] = {}
+                    for k_bc in ("selector", "x", "y", "button", "click_count"):
+                        if args.get(k_bc) is not None:
+                            bc_payload[k_bc] = args[k_bc]
+                    br = await c.post(f"{BROWSER_AUTO_URL}/click", json=bc_payload, timeout=20)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bc: list[dict] = [{"type": "text", "text": f"Clicked. URL: {bd.get('url')}"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bc.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bc
+                except Exception as e_bc:
+                    return _text(f"browser_click: {e_bc}")
+
+            # ================================================================
+            # browser_type — type text
+            # ================================================================
+            if name == "browser_type":
+                bt_text = str(args.get("text", ""))
+                try:
+                    bt_payload: dict[str, Any] = {"text": bt_text}
+                    if args.get("selector"):
+                        bt_payload["selector"] = args["selector"]
+                    if args.get("clear_first"):
+                        bt_payload["clear_first"] = True
+                    br = await c.post(f"{BROWSER_AUTO_URL}/type", json=bt_payload, timeout=20)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bt: list[dict] = [{"type": "text", "text": f"Typed {bd.get('text_length', 0)} chars"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bt.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bt
+                except Exception as e_bt:
+                    return _text(f"browser_type: {e_bt}")
+
+            # ================================================================
+            # browser_screenshot_page — screenshot
+            # ================================================================
+            if name == "browser_screenshot_page":
+                try:
+                    bs_payload: dict[str, Any] = {}
+                    if args.get("full_page"):
+                        bs_payload["full_page"] = True
+                    if args.get("selector"):
+                        bs_payload["selector"] = args["selector"]
+                    br = await c.post(f"{BROWSER_AUTO_URL}/screenshot", json=bs_payload, timeout=15)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bs: list[dict] = [{"type": "text", "text": f"Screenshot of {bd.get('url')}\nTitle: {bd.get('title')}"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bs.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bs
+                except Exception as e_bs:
+                    return _text(f"browser_screenshot_page: {e_bs}")
+
+            # ================================================================
+            # browser_extract — extract content from page
+            # ================================================================
+            if name == "browser_extract":
+                be_what = str(args.get("what", "text")).strip()
+                try:
+                    br = await c.post(f"{BROWSER_AUTO_URL}/extract", json={"what": be_what}, timeout=15)
+                    br.raise_for_status()
+                    bd = br.json()
+                    if be_what == "text":
+                        return _text(f"Page text from {bd.get('url')}:\n\n{bd.get('text', '')[:10000]}")
+                    elif be_what == "links":
+                        links_str = "\n".join(f"- [{l.get('text', '')}]({l.get('href', '')})" for l in bd.get("links", [])[:50])
+                        return _text(f"Links ({bd.get('count', 0)}) from {bd.get('url')}:\n{links_str}")
+                    else:
+                        return _text(json.dumps(bd, indent=2)[:10000])
+                except Exception as e_be:
+                    return _text(f"browser_extract: {e_be}")
+
+            # ================================================================
+            # browser_keyboard — press keys
+            # ================================================================
+            if name == "browser_keyboard":
+                bk_key = str(args.get("key", "")).strip()
+                if not bk_key:
+                    return _text("browser_keyboard: 'key' is required")
+                try:
+                    br = await c.post(f"{BROWSER_AUTO_URL}/keyboard", json={"key": bk_key}, timeout=10)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bk: list[dict] = [{"type": "text", "text": f"Pressed {bk_key}"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bk.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bk
+                except Exception as e_bk:
+                    return _text(f"browser_keyboard: {e_bk}")
+
+            # ================================================================
+            # browser_fill_form — fill form fields
+            # ================================================================
+            if name == "browser_fill_form":
+                bf_fields = args.get("fields", [])
+                if not bf_fields:
+                    return _text("browser_fill_form: 'fields' array is required")
+                try:
+                    br = await c.post(f"{BROWSER_AUTO_URL}/fill_form", json={"fields": bf_fields}, timeout=20)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bf: list[dict] = [{"type": "text", "text": f"Filled {bd.get('filled', 0)}/{bd.get('total', 0)} fields"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bf.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bf
+                except Exception as e_bf:
+                    return _text(f"browser_fill_form: {e_bf}")
+
+            # ================================================================
+            # browser_scroll — scroll page
+            # ================================================================
+            if name == "browser_scroll":
+                try:
+                    bsc_payload: dict[str, Any] = {}
+                    for k_bsc in ("direction", "amount", "selector"):
+                        if args.get(k_bsc) is not None:
+                            bsc_payload[k_bsc] = args[k_bsc]
+                    br = await c.post(f"{BROWSER_AUTO_URL}/scroll", json=bsc_payload, timeout=10)
+                    br.raise_for_status()
+                    bd = br.json()
+                    blocks_bsc: list[dict] = [{"type": "text", "text": "Scrolled"}]
+                    if bd.get("screenshot_b64"):
+                        blocks_bsc.append({"type": "image", "data": bd["screenshot_b64"], "mimeType": "image/png"})
+                    return blocks_bsc
+                except Exception as e_bsc:
+                    return _text(f"browser_scroll: {e_bsc}")
+
+            # ================================================================
+            # browser_evaluate — run JavaScript
+            # ================================================================
+            if name == "browser_evaluate":
+                bev_expr = str(args.get("expression", "")).strip()
+                if not bev_expr:
+                    return _text("browser_evaluate: 'expression' is required")
+                try:
+                    br = await c.post(f"{BROWSER_AUTO_URL}/evaluate", json={"expression": bev_expr}, timeout=15)
+                    br.raise_for_status()
+                    bd = br.json()
+                    return _text(f"JS result: {json.dumps(bd.get('result'), indent=2, default=str)[:5000]}")
+                except Exception as e_bev:
+                    return _text(f"browser_evaluate: {e_bev}")
+
+            # ================================================================
+            # detect_objects — YOLOv8n object detection
+            # ================================================================
+            if name == "detect_objects":
+                try:
+                    do_payload: dict[str, Any] = {}
+                    for k_do in ("image_base64", "image_url", "confidence", "classes"):
+                        if args.get(k_do) is not None:
+                            do_payload[k_do] = args[k_do]
+                    dr = await c.post(f"{DETECT_URL}/objects", json=do_payload, timeout=30)
+                    dr.raise_for_status()
+                    dd = dr.json()
+                    lines_do: list[str] = [f"Detected {dd.get('count', 0)} objects:"]
+                    for cls_name, cls_count in dd.get("classes_found", {}).items():
+                        lines_do.append(f"  {cls_name}: {cls_count}")
+                    lines_do.append(f"\nImage: {dd.get('image_size', {}).get('width', '?')}x{dd.get('image_size', {}).get('height', '?')}")
+                    for det in dd.get("detections", [])[:20]:
+                        bbox = det.get("bbox", {})
+                        lines_do.append(f"  [{det['confidence']:.2f}] {det['class']} at ({bbox.get('x1')},{bbox.get('y1')})-({bbox.get('x2')},{bbox.get('y2')})")
+                    return _text("\n".join(lines_do))
+                except Exception as e_do:
+                    return _text(f"detect_objects: {e_do}")
+
+            # ================================================================
+            # detect_humans — human/person detection
+            # ================================================================
+            if name == "detect_humans":
+                try:
+                    dh_payload: dict[str, Any] = {}
+                    for k_dh in ("image_base64", "image_url", "confidence"):
+                        if args.get(k_dh) is not None:
+                            dh_payload[k_dh] = args[k_dh]
+                    dr = await c.post(f"{DETECT_URL}/humans", json=dh_payload, timeout=30)
+                    dr.raise_for_status()
+                    dd = dr.json()
+                    lines_dh: list[str] = [f"Found {dd.get('count', 0)} people:"]
+                    for i_dh, person in enumerate(dd.get("people", []), 1):
+                        bbox = person.get("bbox", {})
+                        lines_dh.append(f"  Person {i_dh}: confidence={person['confidence']:.2f} at ({bbox.get('x1')},{bbox.get('y1')})-({bbox.get('x2')},{bbox.get('y2')})")
+                    return _text("\n".join(lines_dh))
+                except Exception as e_dh:
+                    return _text(f"detect_humans: {e_dh}")
+
+            # ================================================================
+            # list_tools_by_category — tool discovery helper
+            # ================================================================
+            if name == "list_tools_by_category":
+                _TOOL_CATEGORIES: dict[str, list[str]] = {
+                    "anime": ["anime_search", "anime_pipeline", "image_similarity_search", "saucenao_search"],
+                    "vision": ["image_crop", "image_zoom", "image_scan", "image_enhance", "image_stitch",
+                               "image_diff", "image_annotate", "face_recognize", "image_search",
+                               "image_generate", "image_edit", "image_remix", "image_upscale", "image_caption",
+                               "detect_objects", "detect_humans"],
+                    "browser": ["screenshot", "fetch_image", "browser_save_images",
+                                "browser_download_page_images", "screenshot_search", "browser",
+                                "bulk_screenshot", "scroll_screenshot", "desktop_screenshot", "desktop_control",
+                                "browser_navigate", "browser_click", "browser_type", "browser_screenshot_page",
+                                "browser_extract", "browser_keyboard", "browser_fill_form", "browser_scroll",
+                                "browser_evaluate"],
+                    "search": ["web_search", "web_fetch", "page_extract", "extract_article",
+                               "page_scrape", "page_images", "news_search", "wikipedia",
+                               "arxiv_search", "youtube_transcript", "deep_research", "realtime"],
+                    "memory": ["memory_store", "memory_recall", "db_cache_store", "db_cache_get"],
+                    "code": ["code_run", "run_javascript", "jupyter_exec", "create_tool",
+                             "list_custom_tools", "delete_custom_tool", "call_custom_tool"],
+                    "documents": ["docs_ingest", "docs_extract_tables", "pdf_read", "pdf_edit",
+                                  "pdf_fill_form", "pdf_merge", "pdf_split", "ocr_image", "ocr_pdf", "tts"],
+                    "media": ["video_info", "video_frames", "video_thumbnail", "video_transcode"],
+                    "vector": ["vector_store", "vector_search", "vector_delete", "vector_collections",
+                               "embed_store", "embed_search"],
+                    "planner": ["plan_create_task", "plan_get_task", "plan_complete_task",
+                                "plan_fail_task", "plan_list_tasks", "plan_delete_task", "plan_task"],
+                    "database": ["db_store_article", "db_search", "db_store_image", "db_list_images",
+                                 "researchbox_search", "researchbox_push"],
+                    "jobs": ["job_submit", "job_status", "job_result", "job_cancel", "job_list",
+                             "batch_submit", "orchestrate"],
+                    "utility": ["think", "smart_summarize", "structured_extract", "get_errors",
+                                "list_tools_by_category"],
+                    "graph": ["graph_add_node", "graph_add_edge", "graph_query", "graph_path", "graph_search"],
+                }
+                cat_q = str(args.get("category", "")).strip().lower()
+                search_q = str(args.get("search", "")).strip().lower()
+
+                # Build tool name→description lookup
+                tool_desc: dict[str, str] = {}
+                for t_entry in _TOOLS:
+                    t_name = t_entry.get("name", "")
+                    t_desc = t_entry.get("description", "")
+                    if t_name:
+                        tool_desc[t_name] = t_desc[:120]
+
+                if cat_q and cat_q in _TOOL_CATEGORIES:
+                    tool_names = _TOOL_CATEGORIES[cat_q]
+                    lines_tc: list[str] = [f"Category: {cat_q} ({len(tool_names)} tools)\n"]
+                    for tn in tool_names:
+                        lines_tc.append(f"  {tn}: {tool_desc.get(tn, '(no description)')}")
+                    return _text("\n".join(lines_tc))
+                elif search_q:
+                    matches: list[str] = []
+                    for tn, td in tool_desc.items():
+                        if search_q in tn.lower() or search_q in td.lower():
+                            matches.append(f"  {tn}: {td}")
+                    if matches:
+                        return _text(f"Tools matching '{search_q}' ({len(matches)}):\n" + "\n".join(matches[:20]))
+                    return _text(f"No tools matching '{search_q}'")
+                else:
+                    # List all categories
+                    lines_all: list[str] = ["Available categories:\n"]
+                    for cat_name, cat_tools in sorted(_TOOL_CATEGORIES.items()):
+                        lines_all.append(f"  {cat_name} ({len(cat_tools)} tools)")
+                    lines_all.append("\nCall with category='<name>' to list tools in that category.")
+                    return _text("\n".join(lines_all))
 
             return _text(f"Unknown tool: {name}")
 

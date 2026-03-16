@@ -12,3 +12,4 @@ defusedxml>=0.7.1  # CVE-2013-1664 safe XML parsing
 yfinance>=0.2.40
 feedparser>=6.0.11
 youtube-transcript-api>=0.6.3
+minio>=7.2.0
