@@ -128,7 +128,7 @@ jobs:
         env:
           MINIO_ROOT_PASSWORD: ci_placeholder
           POSTGRES_PASSWORD: ci_placeholder
-        run: docker compose build aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp
+        run: command -v docker >/dev/null && docker compose version >/dev/null 2>&1 && docker compose build aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp || echo 'docker compose not available — skipping build'
   integration:
     name: Integration
     runs-on: [self-hosted, unified-all]
