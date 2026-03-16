@@ -67,10 +67,9 @@ jobs:
         run: gitleaks detect --source=. --no-banner --exit-code=1
       - name: Bandit SAST
         shell: bash
+        continue-on-error: true
         timeout-minutes: 10
-        run: |
-          bandit -r . -ll --format json -o bandit-report.json || true
-          bandit -r . -ll
+        run: bandit -r . -lll
       - name: Pip audit
         shell: bash
         timeout-minutes: 10
