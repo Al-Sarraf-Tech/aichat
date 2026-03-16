@@ -87,7 +87,8 @@ jobs:
       - name: Grype vulnerability scan
         shell: bash
         timeout-minutes: 15
-        run: grype dir:. --fail-on high
+        run: |
+          grype dir:. --fail-on high
       - name: Semgrep SAST
         shell: bash
         continue-on-error: true
@@ -105,7 +106,8 @@ jobs:
       - name: Generate SBOM (syft)
         shell: bash
         timeout-minutes: 10
-        run: syft dir:. -o spdx-json=sbom-spdx.json -o cyclonedx-json=sbom-cyclonedx.json
+        run: |
+          syft dir:. -o spdx-json=sbom-spdx.json -o cyclonedx-json=sbom-cyclonedx.json
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
@@ -133,22 +135,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Integration: static-analysis
+      - name: "Integration: static-analysis"
         shell: bash
         timeout-minutes: 30
-        run: echo 'Integration batch: static-analysis'
-      - name: Integration: regression
+        run: |
+          echo 'Integration batch: static-analysis'
+      - name: "Integration: regression"
         shell: bash
         timeout-minutes: 30
-        run: echo 'Integration batch: regression'
-      - name: Integration: image-builds
+        run: |
+          echo 'Integration batch: regression'
+      - name: "Integration: image-builds"
         shell: bash
         timeout-minutes: 30
-        run: echo 'Integration batch: image-builds'
-      - name: Integration: smoke-tests
+        run: |
+          echo 'Integration batch: image-builds'
+      - name: "Integration: smoke-tests"
         shell: bash
         timeout-minutes: 30
-        run: echo 'Integration batch: smoke-tests'
+        run: |
+          echo 'Integration batch: smoke-tests'
   release:
     name: Release
     runs-on: [self-hosted, unified-all]
