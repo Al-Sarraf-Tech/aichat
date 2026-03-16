@@ -126,7 +126,10 @@ jobs:
       - name: Build Docker images
         shell: bash
         timeout-minutes: 30
-        run: docker compose build aichat-db aichat-database aichat-researchbox aichat-memory aichat-toolkit aichat-mcp
+        env:
+          MINIO_ROOT_PASSWORD: ci_placeholder
+          POSTGRES_PASSWORD: ci_placeholder
+        run: docker compose build aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp
   integration:
     name: Integration
     runs-on: [self-hosted, unified-all]
