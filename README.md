@@ -1,13 +1,11 @@
 # AIChat
 
 [![CI](https://github.com/jalsarraf0/aichat/actions/workflows/ci.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/ci.yml)
-[![Security CI](https://github.com/jalsarraf0/aichat/actions/workflows/security.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/security.yml)
-[![SBOM & Vulnerability Audit](https://github.com/jalsarraf0/aichat/actions/workflows/sbom.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/sbom.yml)
-[![Vision Stack CI](https://github.com/jalsarraf0/aichat/actions/workflows/vision-ci.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/vision-ci.yml)
-[![Release](https://github.com/jalsarraf0/aichat/actions/workflows/release.yml/badge.svg)](https://github.com/jalsarraf0/aichat/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/jalsarraf0/aichat?display_name=tag)](https://github.com/jalsarraf0/aichat/releases)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-informational)
+
+> CI runs on self-hosted runners managed by [haskell-ci-orchestrator](https://github.com/jalsarraf0/haskell-ci-orchestrator) with build attestation. Lint, test, security, SBOM, Docker, integration, and release are unified in a single pipeline.
 
 A **local-first AI chat platform** built on [Textual](https://github.com/Textualize/textual) (terminal UI) + Docker. It connects your LLM (via [LM Studio](https://lmstudio.ai)) to **96 real tools** through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io): web search, image recognition, GPU-accelerated vision, code execution, persistent memory, knowledge graphs, vector search, PDF processing, and more — all running locally with no cloud dependency.
 
