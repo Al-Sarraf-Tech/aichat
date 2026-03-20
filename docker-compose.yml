@@ -24,6 +24,11 @@ services:
     image: qdrant/qdrant:latest
     volumes:
       - qdrantdb:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" | timeout 2 bash -c \"exec 3<>/dev/tcp/localhost/6333; cat >&3; cat <&3\" | grep -q \"healthz check passed\"'"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -209,6 +214,8 @@ services:
       # Set EMBED_MODEL to pin the embedding model (auto-detected from LM Studio if unset).
       IMAGE_GEN_BASE_URL: ${IMAGE_GEN_BASE_URL:-http://192.168.50.2:1234}
       IMAGE_GEN_MODEL:  "${IMAGE_GEN_MODEL:-}"
+      # ComfyUI — dedicated diffusion server on WSL2 RTX 3090 (preferred for image gen)
+      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8188}"
       EMBED_MODEL: "${EMBED_MODEL:-}"
       # MinIO S3-compatible object store for image pipeline
       MINIO_URL: http://aichat-minio:9002
@@ -238,7 +245,7 @@ services:
       aichat-sandbox:
         condition: service_healthy
       aichat-vector:
-        condition: service_started
+        condition: service_healthy
       aichat-searxng:
         condition: service_healthy
       aichat-minio:
@@ -406,8 +413,11 @@ services:
       TOOL_ROUTER_URL: http://192.168.50.2:1235
       LM_STUDIO_URL: http://192.168.50.2:1234
       LM_STUDIO_FALLBACK_URL: http://100.78.39.76:1234
+      COMFYUI_URL: "${COMFYUI_URL:-http://100.91.44.100:8188}"
       DB_PATH: /app/data/dartboard.db
       WEB_DIR: /app/web
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       aichat-mcp:
         condition: service_healthy

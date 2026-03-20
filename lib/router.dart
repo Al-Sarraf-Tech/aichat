@@ -49,7 +49,9 @@ class AppRouter {
       ..get('/api/models', _listModels)
       ..get('/api/personalities', _listPersonalities)
       ..post('/api/warmup', _warmupModel)
-      ..post('/api/unload', _unloadModel);
+      ..post('/api/unload', _unloadModel)
+      ..get('/api/image/status', _imageStatus)
+      ..post('/api/image/generate', _imageGenerate);
   }
 
   Handler get handler {
@@ -962,6 +964,206 @@ class AppRouter {
     return _json({'status': 'acknowledged', 'model': model});
   }
 
+  // ── Image Generation (ComfyUI Proxy) ──────────────────────────────
+
+  Future<Response> _imageStatus(Request request) async {
+    if (config.comfyuiUrl.isEmpty) {
+      return _json({'ok': false, 'error': 'ComfyUI not configured'});
+    }
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final req = await client.getUrl(Uri.parse('${config.comfyuiUrl}/system_stats'));
+      final resp = await req.close().timeout(const Duration(seconds: 5));
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        final data = jsonDecode(body);
+        final devices = (data is Map ? data['devices'] as List? : null) ?? [];
+        final gpu = devices.isNotEmpty ? (devices[0]['name'] ?? 'GPU') as String : '';
+        return _json({'ok': true, 'gpu': gpu});
+      }
+      return _json({'ok': false, 'error': 'ComfyUI returned ${resp.statusCode}'});
+    } catch (e) {
+      return _json({'ok': false, 'error': 'ComfyUI unreachable: $e'});
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<Response> _imageGenerate(Request request) async {
+    if (config.comfyuiUrl.isEmpty) {
+      return _json({'error': 'ComfyUI not configured'}, status: 503);
+    }
+    final body = await _readJson(request);
+    if (body == null) return _json({'error': 'Invalid JSON'}, status: 400);
+    final prompt = (body['prompt'] as String?)?.trim() ?? '';
+    if (prompt.isEmpty) return _json({'error': 'prompt is required'}, status: 400);
+    final model = (body['model'] as String?) ?? 'flux_schnell';
+    final width = _toInt(body['width'], 1024);
+    final height = _toInt(body['height'], 1024);
+    final negPrompt = (body['negative_prompt'] as String?) ?? '';
+    final steps = body['steps'] != null ? _toInt(body['steps'], 0) : null;
+    final seed = body['seed'] != null ? _toInt(body['seed'], -1) : null;
+    _log.info('Image generate: model=$model, ${width}x$height, prompt="${prompt.length > 60 ? '${prompt.substring(0, 60)}...' : prompt}"');
+
+    final client = HttpClient();
+    try {
+      final workflow = _buildComfyWorkflow(
+        model: model, prompt: prompt, negPrompt: negPrompt,
+        width: width, height: height, steps: steps, seed: seed,
+      );
+
+      // Submit prompt to ComfyUI
+      final submitReq = await client.postUrl(Uri.parse('${config.comfyuiUrl}/prompt'));
+      submitReq.headers.contentType = ContentType.json;
+      submitReq.write(jsonEncode({'prompt': workflow}));
+      final submitResp = await submitReq.close().timeout(const Duration(seconds: 30));
+      final submitBody = await submitResp.transform(utf8.decoder).join();
+      if (submitResp.statusCode != 200) {
+        return _json({'error': 'ComfyUI rejected workflow: $submitBody'}, status: 502);
+      }
+      final submitData = jsonDecode(submitBody);
+      final promptId = submitData is Map ? submitData['prompt_id'] as String? : null;
+      if (promptId == null || promptId.isEmpty) {
+        return _json({'error': 'ComfyUI did not return a prompt_id'}, status: 502);
+      }
+
+      // Poll for completion (up to 300s)
+      Map<String, dynamic>? outputs;
+      for (var i = 0; i < 600; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        try {
+          final histReq = await client.getUrl(Uri.parse('${config.comfyuiUrl}/history/$promptId'));
+          final histResp = await histReq.close().timeout(const Duration(seconds: 10));
+          if (histResp.statusCode != 200) continue;
+          final histBody = await histResp.transform(utf8.decoder).join();
+          final hist = jsonDecode(histBody);
+          if (hist is! Map || !hist.containsKey(promptId)) continue;
+          final entry = hist[promptId];
+          if (entry is! Map) continue;
+          final statusStr = (entry['status'] as Map?)?['status_str'] as String?;
+          if (statusStr == 'error' || statusStr == 'failed' || statusStr == 'cancelled') {
+            return _json({'error': 'ComfyUI workflow $statusStr'}, status: 500);
+          }
+          final outs = entry['outputs'];
+          if (outs is Map<String, dynamic> && outs.containsKey('9')) {
+            outputs = outs;
+            break;
+          }
+        } on FormatException {
+          continue; // Malformed JSON from history — retry
+        } on TimeoutException {
+          continue; // Single poll timed out — retry
+        }
+      }
+      if (outputs == null) {
+        return _json({'error': 'Generation timed out (300s)'}, status: 504);
+      }
+
+      // Fetch generated images
+      final outputNode = outputs['9'];
+      if (outputNode is! Map || outputNode['images'] is! List) {
+        return _json({'error': 'ComfyUI output missing images'}, status: 500);
+      }
+      final imageList = outputNode['images'] as List;
+      final images = <Map<String, dynamic>>[];
+      for (final imgInfo in imageList) {
+        if (imgInfo is! Map) continue;
+        final fname = imgInfo['filename'] as String?;
+        if (fname == null) continue;
+        final subfolder = (imgInfo['subfolder'] as String?) ?? '';
+        final viewUrl = Uri.parse('${config.comfyuiUrl}/view').replace(
+          queryParameters: {'filename': fname, 'subfolder': subfolder, 'type': 'output'},
+        );
+        final imgReq = await client.getUrl(viewUrl);
+        final imgResp = await imgReq.close().timeout(const Duration(seconds: 30));
+        final builder = BytesBuilder(copy: false);
+        await imgResp.forEach(builder.add);
+        final imgBytes = builder.takeBytes();
+        // Cap at 50MB to prevent OOM
+        if (imgBytes.length > 50 * 1024 * 1024) continue;
+        images.add({
+          'data': base64Encode(imgBytes),
+          'filename': fname,
+        });
+      }
+      _log.info('Image generate complete: ${images.length} images from $model');
+      return _json({'images': images, 'model': model, 'seed': seed});
+    } catch (e) {
+      _log.severe('Image generate error: $e');
+      return _json({'error': 'Generation failed: $e'}, status: 500);
+    } finally {
+      client.close();
+    }
+  }
+
+  Map<String, dynamic> _buildComfyWorkflow({
+    required String model,
+    required String prompt,
+    required String negPrompt,
+    required int width,
+    required int height,
+    int? steps,
+    int? seed,
+  }) {
+    final rng = seed ?? DateTime.now().millisecondsSinceEpoch % (1 << 32);
+    // Model configs
+    const models = {
+      'flux_schnell': {'unet': 'flux1-schnell.safetensors', 'steps': 4, 'cfg': 1.0, 'type': 'flux'},
+      'flux_dev':     {'unet': 'flux1-dev.safetensors',     'steps': 25, 'cfg': 1.0, 'type': 'flux'},
+      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'unet': 'sdxl_lightning_4step.safetensors', 'steps': 4, 'cfg': 1.5, 'type': 'sdxl_lightning'},
+      'sdxl_turbo':   {'ckpt': 'sdxl_turbo.safetensors', 'steps': 1, 'cfg': 1.0, 'type': 'sdxl_turbo'},
+    };
+    final cfg = models[model] ?? models['flux_schnell']!;
+    final s = steps ?? (cfg['steps'] as int);
+    final c = cfg['cfg'] as double;
+    final type = cfg['type'] as String;
+
+    if (type == 'flux') {
+      return {
+        '3': {'class_type': 'KSampler', 'inputs': {
+          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'simple', 'denoise': 1.0,
+          'model': ['4', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['5', 0]}},
+        '4': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'fp16'}},
+        '5': {'class_type': 'EmptySD3LatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['11', 0]}},
+        '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['11', 0]}},
+        '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['3', 0], 'vae': ['10', 0]}},
+        '9': {'class_type': 'SaveImage', 'inputs': {'filename_prefix': 'aichat_$model', 'images': ['8', 0]}},
+        '10': {'class_type': 'VAELoader', 'inputs': {'vae_name': 'ae.safetensors'}},
+        '11': {'class_type': 'DualCLIPLoader', 'inputs': {'clip_name1': 'clip_l.safetensors', 'clip_name2': 't5xxl_fp16.safetensors', 'type': 'flux'}},
+      };
+    } else if (type == 'sdxl_turbo') {
+      final w = width > 512 ? 512 : width;
+      final h = height > 512 ? 512 : height;
+      return {
+        '3': {'class_type': 'KSampler', 'inputs': {
+          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'normal', 'denoise': 1.0,
+          'model': ['4', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['5', 0]}},
+        '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
+        '5': {'class_type': 'EmptyLatentImage', 'inputs': {'width': w, 'height': h, 'batch_size': 1}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['4', 1]}},
+        '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['4', 1]}},
+        '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['3', 0], 'vae': ['4', 2]}},
+        '9': {'class_type': 'SaveImage', 'inputs': {'filename_prefix': 'aichat_$model', 'images': ['8', 0]}},
+      };
+    } else {
+      // sdxl_lightning
+      return {
+        '3': {'class_type': 'KSampler', 'inputs': {
+          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'sgm_uniform', 'denoise': 1.0,
+          'model': ['4c', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['5', 0]}},
+        '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
+        '4b': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'default'}},
+        '4c': {'class_type': 'ModelMergeSimple', 'inputs': {'model1': ['4', 0], 'model2': ['4b', 0], 'ratio': 1.0}},
+        '5': {'class_type': 'EmptyLatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['4', 1]}},
+        '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['4', 1]}},
+        '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['3', 0], 'vae': ['4', 2]}},
+        '9': {'class_type': 'SaveImage', 'inputs': {'filename_prefix': 'aichat_$model', 'images': ['8', 0]}},
+      };
+    }
+  }
+
   // ── Tool Result Sanitizer ─────────────────────────────────────────
 
   /// Clean tool results before feeding back to LLM to prevent
@@ -1128,6 +1330,14 @@ class AppRouter {
     if (controller.isClosed) return;
     final payload = 'event: $event\ndata: ${jsonEncode(data)}\n\n';
     controller.add(utf8.encode(payload));
+  }
+
+  /// Parse a value to int, handling both int and String inputs from JSON.
+  int _toInt(dynamic value, int fallback) {
+    if (value is int) return value;
+    if (value is double) return value.toInt();
+    if (value is String) return int.tryParse(value) ?? fallback;
+    return fallback;
   }
 
   Response _json(Map<String, dynamic> data, {int status = 200}) {

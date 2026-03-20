@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Jamal's AI Lab</title>
-  <link rel="stylesheet" href="style.css?v=25">
+  <link rel="stylesheet" href="style.css?v=27">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" crossorigin="anonymous"></script>
@@ -64,6 +64,10 @@
         <button id="menu-btn" onclick="toggleSidebar()" title="Toggle sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
+        <div id="tab-nav">
+          <button class="tab-btn active" data-tab="chat" onclick="switchTab('chat')">Chat</button>
+          <button class="tab-btn" data-tab="imagegen" onclick="switchTab('imagegen')">Image Gen</button>
+        </div>
         <div id="model-selector">
           <button id="model-btn" onclick="toggleModelMenu()">
             <span id="model-label">Loading models...</span>
@@ -135,6 +139,84 @@
           </div>
         </div>
         <div id="chat-view" class="hidden"><div id="messages"></div></div>
+
+        <!-- Image Generation Tab -->
+        <div id="imagegen-view" class="hidden">
+          <div class="ig-container">
+            <div class="ig-controls">
+              <h2 class="ig-title">Image Generation</h2>
+              <div class="ig-model-select">
+                <label>Model</label>
+                <div class="ig-model-grid">
+                  <button class="ig-model-btn active" data-model="flux_schnell" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">FLUX Schnell</span>
+                    <span class="ig-model-meta">4 steps &middot; ~3s &middot; 1024px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="flux_dev" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">FLUX Dev</span>
+                    <span class="ig-model-meta">25 steps &middot; ~15s &middot; 1024px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="sdxl_lightning" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">SDXL Lightning</span>
+                    <span class="ig-model-meta">4 steps &middot; ~2s &middot; 1024px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="sdxl_turbo" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">SDXL Turbo</span>
+                    <span class="ig-model-meta">1 step &middot; ~1s &middot; 512px</span>
+                  </button>
+                </div>
+                <div class="ig-model-status">
+                  <span class="ig-status-dot"></span>
+                  <span id="ig-status-text">Ready</span>
+                </div>
+              </div>
+              <div class="ig-field">
+                <label for="ig-prompt">Prompt</label>
+                <textarea id="ig-prompt" rows="4" placeholder="A photorealistic astronaut riding a horse on Mars, cinematic lighting, 8k..."></textarea>
+              </div>
+              <div class="ig-field">
+                <label for="ig-negative">Negative Prompt <span class="ig-optional">(optional)</span></label>
+                <input id="ig-negative" type="text" placeholder="blurry, low quality, distorted...">
+              </div>
+              <div class="ig-row">
+                <div class="ig-field ig-half">
+                  <label for="ig-width">Width</label>
+                  <select id="ig-width">
+                    <option value="512">512</option>
+                    <option value="768">768</option>
+                    <option value="1024" selected>1024</option>
+                  </select>
+                </div>
+                <div class="ig-field ig-half">
+                  <label for="ig-height">Height</label>
+                  <select id="ig-height">
+                    <option value="512">512</option>
+                    <option value="768">768</option>
+                    <option value="1024" selected>1024</option>
+                  </select>
+                </div>
+              </div>
+              <div class="ig-row">
+                <div class="ig-field ig-half">
+                  <label for="ig-steps">Steps <span class="ig-optional">(auto)</span></label>
+                  <input id="ig-steps" type="number" placeholder="auto" min="1" max="50">
+                </div>
+                <div class="ig-field ig-half">
+                  <label for="ig-seed">Seed <span class="ig-optional">(random)</span></label>
+                  <input id="ig-seed" type="number" placeholder="random" min="0">
+                </div>
+              </div>
+              <button id="ig-generate-btn" onclick="generateImage()">Generate</button>
+            </div>
+            <div class="ig-output">
+              <div id="ig-gallery"></div>
+              <div id="ig-loading" class="hidden">
+                <div class="ig-spinner"></div>
+                <span id="ig-loading-text">Generating...</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div id="input-box">
@@ -154,6 +236,6 @@
       </div>
     </main>
   </div>
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=27"></script>
 </body>
 </html>

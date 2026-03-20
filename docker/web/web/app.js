@@ -1372,6 +1372,179 @@ function applyCustomPrompt() {
   closePersonalityModal();
 }
 
+// ── Tab Navigation ────────────────────────────────────────────────
+let currentTab = 'chat';
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  // Show/hide chat elements
+  const igView = document.getElementById('imagegen-view');
+  if (tab === 'chat') {
+    igView.classList.add('hidden');
+    document.getElementById('input-box').classList.remove('hidden');
+    document.getElementById('model-selector').style.display = '';
+    document.getElementById('model-caps').style.display = '';
+    document.getElementById('tools-toggle').style.display = '';
+    // Restore chat view state
+    if (currentConvId) {
+      document.getElementById('welcome').classList.add('hidden');
+      document.getElementById('chat-view').classList.remove('hidden');
+    } else {
+      document.getElementById('welcome').classList.remove('hidden');
+      document.getElementById('chat-view').classList.add('hidden');
+    }
+  } else {
+    document.getElementById('welcome').classList.add('hidden');
+    document.getElementById('chat-view').classList.add('hidden');
+    document.getElementById('input-box').classList.add('hidden');
+    document.getElementById('model-selector').style.display = 'none';
+    document.getElementById('model-caps').style.display = 'none';
+    document.getElementById('tools-toggle').style.display = 'none';
+    igView.classList.remove('hidden');
+    checkComfyUIStatus();
+  }
+}
+
+// ── Image Generation ──────────────────────────────────────────────
+let igSelectedModel = 'flux_schnell';
+let igGenerating = false;
+
+function selectIgModel(btn) {
+  document.querySelectorAll('.ig-model-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  igSelectedModel = btn.dataset.model;
+  // Auto-adjust resolution for SDXL Turbo
+  if (igSelectedModel === 'sdxl_turbo') {
+    document.getElementById('ig-width').value = '512';
+    document.getElementById('ig-height').value = '512';
+  } else {
+    document.getElementById('ig-width').value = '1024';
+    document.getElementById('ig-height').value = '1024';
+  }
+}
+
+async function checkComfyUIStatus() {
+  const dot = document.querySelector('.ig-status-dot');
+  const txt = document.getElementById('ig-status-text');
+  try {
+    const r = await authFetch('/api/image/status');
+    const d = await r.json();
+    if (d.ok) {
+      dot.className = 'ig-status-dot';
+      txt.textContent = 'ComfyUI ready' + (d.gpu ? ' — ' + d.gpu : '');
+    } else {
+      dot.className = 'ig-status-dot error';
+      txt.textContent = d.error || 'ComfyUI unreachable';
+    }
+  } catch {
+    dot.className = 'ig-status-dot error';
+    txt.textContent = 'Cannot reach backend';
+  }
+}
+
+async function generateImage() {
+  const prompt = document.getElementById('ig-prompt').value.trim();
+  if (!prompt) return;
+  if (igGenerating) return;
+  igGenerating = true;
+  const btn = document.getElementById('ig-generate-btn');
+  const loading = document.getElementById('ig-loading');
+  const loadingText = document.getElementById('ig-loading-text');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  loading.classList.remove('hidden');
+  const dot = document.querySelector('.ig-status-dot');
+  dot.className = 'ig-status-dot busy';
+  const modelNames = { flux_schnell: 'FLUX Schnell', flux_dev: 'FLUX Dev', sdxl_lightning: 'SDXL Lightning', sdxl_turbo: 'SDXL Turbo' };
+  loadingText.textContent = `Generating with ${modelNames[igSelectedModel] || igSelectedModel}...`;
+  const body = {
+    prompt,
+    model: igSelectedModel,
+    width: parseInt(document.getElementById('ig-width').value),
+    height: parseInt(document.getElementById('ig-height').value),
+  };
+  const neg = document.getElementById('ig-negative').value.trim();
+  if (neg) body.negative_prompt = neg;
+  const steps = document.getElementById('ig-steps').value;
+  if (steps) body.steps = parseInt(steps);
+  const seed = document.getElementById('ig-seed').value;
+  if (seed) body.seed = parseInt(seed);
+  try {
+    const r = await authFetch('/api/image/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      let errMsg;
+      try { errMsg = JSON.parse(errText).error; } catch { errMsg = errText.slice(0, 200); }
+      throw new Error(errMsg || `HTTP ${r.status}`);
+    }
+    const d = await r.json();
+    if (d.images && d.images.length > 0) {
+      const gallery = document.getElementById('ig-gallery');
+      for (const img of d.images) {
+        const card = document.createElement('div');
+        card.className = 'ig-image-card';
+        const imgEl = document.createElement('img');
+        // Convert base64 to blob URL to reduce DOM memory
+        try {
+          const bin = atob(img.data);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'image/jpeg' });
+          imgEl.src = URL.createObjectURL(blob);
+        } catch { imgEl.src = `data:image/jpeg;base64,${img.data}`; }
+        imgEl.loading = 'lazy';
+        imgEl.alt = prompt.slice(0, 100);
+        imgEl.onclick = () => {
+          document.querySelectorAll('.ig-lightbox').forEach(el => el.remove());
+          const lb = document.createElement('div');
+          lb.className = 'ig-lightbox';
+          lb.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;cursor:pointer';
+          const lbImg = document.createElement('img');
+          lbImg.src = imgEl.src;
+          lbImg.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px';
+          lb.appendChild(lbImg);
+          lb.onclick = () => lb.remove();
+          document.addEventListener('keydown', function _esc(e) { if (e.key === 'Escape') { lb.remove(); document.removeEventListener('keydown', _esc); } });
+          document.body.appendChild(lb);
+        };
+        card.appendChild(imgEl);
+        const info = document.createElement('div');
+        info.className = 'ig-image-info';
+        const _esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        info.innerHTML = `<span class="ig-image-model">${_esc(modelNames[igSelectedModel] || igSelectedModel)}</span> &middot; ${_esc(prompt.slice(0, 80))}${prompt.length > 80 ? '...' : ''}`;
+        if (d.seed !== undefined) info.innerHTML += ` &middot; seed: ${_esc(String(d.seed))}`;
+        card.appendChild(info);
+        gallery.prepend(card);
+      }
+      // Cap gallery at 50 images to prevent memory bloat
+      while (gallery.children.length > 50) {
+        const old = gallery.lastElementChild;
+        const oldImg = old?.querySelector('img');
+        if (oldImg?.src?.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
+        old.remove();
+      }
+      dot.className = 'ig-status-dot';
+    } else {
+      dot.className = 'ig-status-dot error';
+      document.getElementById('ig-status-text').textContent = d.error || 'No images returned — try a different prompt';
+    }
+  } catch (e) {
+    if (e.message === 'Not authenticated') return; // auth screen already shown
+    dot.className = 'ig-status-dot error';
+    document.getElementById('ig-status-text').textContent = e.message || 'Generation failed';
+  } finally {
+    igGenerating = false;
+    btn.disabled = false;
+    btn.textContent = 'Generate';
+    loading.classList.add('hidden');
+  }
+}
+
 // ── Model Unload on Page Exit ──────────────────────────────────────
 window.addEventListener('beforeunload', () => {
   if (selectedModel && localStorage.getItem('dartboard-jwt')) {

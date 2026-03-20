@@ -819,6 +819,8 @@ BROWSER_WORKSPACE = os.environ.get("BROWSER_WORKSPACE", "/browser-workspace")
 # Image generation — LM Studio OpenAI-compatible image API (or any compatible backend).
 IMAGE_GEN_BASE_URL = os.environ.get("IMAGE_GEN_BASE_URL", "http://192.168.50.2:1234")
 IMAGE_GEN_MODEL    = os.environ.get("IMAGE_GEN_MODEL", "")
+# ComfyUI — dedicated diffusion server (preferred over LM Studio for image gen when available).
+COMFYUI_URL        = os.environ.get("COMFYUI_URL", "")
 # Embedding model — if unset, auto-detected from LM Studio on first use (looks for "embed" in model name).
 _EMBED_MODEL_OVERRIDE = os.environ.get("EMBED_MODEL", "")
 _embed_model_cache: str | None = None  # cached after first auto-detection
@@ -5297,28 +5299,199 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 return _pil_to_blocks(canvas, summary, quality=85, save_prefix="fullpage")
 
             # ----------------------------------------------------------------
-            # image_generate — text-to-image via LM Studio / OpenAI-compatible API
+            # ComfyUI helper — submit workflow, poll for result, return b64 images
+            # ----------------------------------------------------------------
+            async def _comfyui_generate(
+                client: httpx.AsyncClient,
+                prompt_text: str,
+                model: str = "flux_schnell",
+                width: int = 1024,
+                height: int = 1024,
+                steps: int | None = None,
+                seed: int | None = None,
+                n: int = 1,
+                negative_prompt: str = "",
+            ) -> list[dict[str, Any]]:
+                """Generate images via ComfyUI API. Returns list of MCP image blocks."""
+                import json as _json, random
+                # Model → workflow mapping
+                _model_map = {
+                    "flux_schnell": {"unet": "flux1-schnell.safetensors", "steps": 4, "cfg": 1.0, "type": "flux"},
+                    "flux_dev":     {"unet": "flux1-dev.safetensors",     "steps": 25, "cfg": 1.0, "type": "flux"},
+                    "sdxl_lightning": {"ckpt": "sd_xl_base_1.0.safetensors", "unet": "sdxl_lightning_4step.safetensors", "steps": 4, "cfg": 1.5, "type": "sdxl_lightning"},
+                    "sdxl_turbo":   {"ckpt": "sdxl_turbo.safetensors",   "steps": 1, "cfg": 1.0, "type": "sdxl_turbo"},
+                }
+                cfg = _model_map.get(model, _model_map["flux_schnell"])
+                _steps = steps or cfg["steps"]
+                _seed = seed if seed is not None and seed >= 0 else random.randint(0, 2**32 - 1)
+                # Build ComfyUI workflow based on model type
+                if cfg["type"] == "flux":
+                    workflow = {
+                        "3": {"class_type": "KSampler", "inputs": {
+                            "seed": _seed, "steps": _steps, "cfg": cfg["cfg"],
+                            "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                            "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
+                        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "fp16"}},
+                        "5": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+                        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt_text, "clip": ["11", 0]}},
+                        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["11", 0]}},
+                        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["10", 0]}},
+                        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+                        "10": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+                        "11": {"class_type": "DualCLIPLoader", "inputs": {
+                            "clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp16.safetensors", "type": "flux"}},
+                    }
+                elif cfg["type"] == "sdxl_turbo":
+                    _w = min(width, 512)
+                    _h = min(height, 512)
+                    workflow = {
+                        "3": {"class_type": "KSampler", "inputs": {
+                            "seed": _seed, "steps": _steps, "cfg": cfg["cfg"],
+                            "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0,
+                            "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
+                        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": cfg["ckpt"]}},
+                        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": _w, "height": _h, "batch_size": n}},
+                        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt_text, "clip": ["4", 1]}},
+                        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["4", 1]}},
+                        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+                        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+                    }
+                else:  # sdxl_lightning
+                    workflow = {
+                        "3": {"class_type": "KSampler", "inputs": {
+                            "seed": _seed, "steps": _steps, "cfg": cfg["cfg"],
+                            "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0,
+                            "model": ["4c", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
+                        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": cfg["ckpt"]}},
+                        "4b": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "default"}},
+                        "4c": {"class_type": "ModelMergeSimple", "inputs": {"model1": ["4", 0], "model2": ["4b", 0], "ratio": 1.0}},
+                        "5": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+                        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt_text, "clip": ["4", 1]}},
+                        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["4", 1]}},
+                        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+                        "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+                    }
+                # Submit prompt
+                resp = await client.post(
+                    f"{COMFYUI_URL}/prompt",
+                    json={"prompt": workflow},
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                prompt_id = resp.json()["prompt_id"]
+                # Poll for completion (up to 300s for FLUX-dev)
+                for _ in range(600):
+                    await asyncio.sleep(0.5)
+                    hist_resp = await client.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=10.0)
+                    if hist_resp.status_code != 200:
+                        continue
+                    hist = hist_resp.json()
+                    if prompt_id not in hist:
+                        continue
+                    entry = hist[prompt_id]
+                    if entry.get("status", {}).get("status_str") == "error":
+                        msgs = entry.get("status", {}).get("messages", [])
+                        raise RuntimeError(f"ComfyUI workflow error: {msgs}")
+                    outputs = entry.get("outputs", {})
+                    if "9" in outputs:
+                        break
+                else:
+                    raise TimeoutError("ComfyUI generation timed out (300s)")
+                # Fetch images
+                image_list = outputs["9"].get("images", [])
+                blocks: list[dict[str, Any]] = []
+                for i, img_info in enumerate(image_list):
+                    fname = img_info["filename"]
+                    subfolder = img_info.get("subfolder", "")
+                    img_resp = await client.get(
+                        f"{COMFYUI_URL}/view",
+                        params={"filename": fname, "subfolder": subfolder, "type": "output"},
+                        timeout=30.0,
+                    )
+                    img_resp.raise_for_status()
+                    img_bytes = img_resp.content
+                    # Save to workspace
+                    save_note = ""
+                    if os.path.isdir(BROWSER_WORKSPACE):
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        save_name = f"generated_{i}_{ts}.jpg"
+                        save_path = os.path.join(BROWSER_WORKSPACE, save_name)
+                        if _HAS_PIL:
+                            with _PilImage.open(_io.BytesIO(img_bytes)) as gi:
+                                gi.convert("RGB").save(save_path, format="JPEG", quality=95)
+                        else:
+                            with open(save_path, "wb") as fh:
+                                fh.write(img_bytes)
+                        save_note = f"\n→ Saved as: {save_name}"
+                    # Convert to b64
+                    if _HAS_PIL:
+                        with _PilImage.open(_io.BytesIO(img_bytes)) as gi:
+                            gi = gi.convert("RGB")
+                            if gi.width > 1280 or gi.height > 1280:
+                                gi.thumbnail((1280, 1280), _PilImage.LANCZOS)
+                            buf = _io.BytesIO()
+                            gi.save(buf, format="JPEG", quality=90)
+                        b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+                    else:
+                        b64 = base64.standard_b64encode(img_bytes).decode("ascii")
+                    summary = (
+                        f"Generated image {i+1}/{len(image_list)}\n"
+                        f"Model: {model} | Steps: {_steps} | Seed: {_seed}\n"
+                        f"Prompt: {prompt_text[:200]}{save_note}"
+                    )
+                    blocks.extend([
+                        {"type": "text", "text": summary},
+                        {"type": "image", "data": b64, "mimeType": "image/jpeg"},
+                    ])
+                return blocks
+
+            # ----------------------------------------------------------------
+            # image_generate — text-to-image via ComfyUI (preferred) or LM Studio fallback
             # ----------------------------------------------------------------
             if name == "image_generate":
                 prompt = str(args.get("prompt", "")).strip()
                 if not prompt:
                     return _text("image_generate: 'prompt' is required")
-                # Fast model-availability check — avoids a 180 s timeout when nothing is loaded
+                model_arg = str(args.get("model", "")).strip()
+                size  = str(args.get("size", "1024x1024")).strip()
+                n     = max(1, min(int(args.get("n", 1)), 4))
+                neg   = str(args.get("negative_prompt", "")).strip() or ""
+                steps = args.get("steps")
+                gs    = args.get("guidance_scale")
+                seed  = args.get("seed")
+                # Parse size
+                try:
+                    _w, _h = (int(x) for x in size.split("x"))
+                except Exception:
+                    _w, _h = 1024, 1024
+                # --- ComfyUI path (preferred) ---
+                if COMFYUI_URL:
+                    # Map model arg to ComfyUI model name
+                    _comfy_models = ["flux_schnell", "flux_dev", "sdxl_lightning", "sdxl_turbo"]
+                    comfy_model = model_arg if model_arg in _comfy_models else "flux_schnell"
+                    try:
+                        # Quick health check
+                        _hc = await c.get(f"{COMFYUI_URL}/system_stats", timeout=5.0)
+                        if _hc.status_code == 200:
+                            return await _comfyui_generate(
+                                client=c, prompt_text=prompt, model=comfy_model,
+                                width=_w, height=_h, steps=int(steps) if steps else None,
+                                seed=int(seed) if seed is not None else None,
+                                n=n, negative_prompt=neg,
+                            )
+                    except Exception as comfy_exc:
+                        log.warning("ComfyUI unavailable (%s), falling back to LM Studio", comfy_exc)
+                # --- LM Studio fallback ---
                 if not await ModelRegistry.get().has_image_gen(c):
                     loaded = [m.get("id","?") for m in await ModelRegistry.get().models(c)]
                     loaded_str = ", ".join(loaded) if loaded else "none"
                     return _text(
-                        f"image_generate: no image-generation model is loaded in LM Studio.\n"
-                        f"Currently loaded: {loaded_str}\n"
-                        "→ Load FLUX, SDXL, or another diffusion model in LM Studio and try again."
+                        f"image_generate: no image backend available.\n"
+                        f"ComfyUI: {'not configured' if not COMFYUI_URL else 'unreachable'}\n"
+                        f"LM Studio models loaded: {loaded_str}\n"
+                        "→ Start ComfyUI or load a diffusion model in LM Studio."
                     )
-                model = str(args.get("model", IMAGE_GEN_MODEL)).strip() or None
-                size  = str(args.get("size", "512x512")).strip()
-                n     = max(1, min(int(args.get("n", 1)), 4))
-                neg   = str(args.get("negative_prompt", "")).strip() or None
-                steps = args.get("steps")
-                gs    = args.get("guidance_scale")
-                seed  = args.get("seed")
+                model = model_arg or IMAGE_GEN_MODEL or None
                 payload: dict = {"prompt": prompt, "n": n, "size": size, "response_format": "b64_json"}
                 if model:        payload["model"]                = model
                 if neg:          payload["negative_prompt"]       = neg

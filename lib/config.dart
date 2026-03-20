@@ -22,6 +22,9 @@ class Config {
   /// URL for an external tool-routing model. Empty = use built-in rules.
   final String toolRouterUrl;
 
+  /// ComfyUI URL for dedicated image generation. Empty = disabled.
+  final String comfyuiUrl;
+
   Config({
     required this.lmStudioUrl,
     required this.lmStudioFallbackUrl,
@@ -39,6 +42,7 @@ class Config {
     required this.webDir,
     required this.maxLoadedModels,
     required this.toolRouterUrl,
+    required this.comfyuiUrl,
   });
 
   factory Config.fromEnv() {
@@ -65,6 +69,7 @@ class Config {
       webDir: env['WEB_DIR'] ?? 'web',
       maxLoadedModels: int.tryParse(env['LM_STUDIO_MAX_LOADED'] ?? '') ?? 2,
       toolRouterUrl: env['TOOL_ROUTER_URL'] ?? '',
+      comfyuiUrl: env['COMFYUI_URL'] ?? '',
     );
   }
 }
