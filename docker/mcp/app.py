@@ -5412,8 +5412,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     img_bytes = img_resp.content
                     # Save to workspace
                     save_note = ""
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                     if os.path.isdir(BROWSER_WORKSPACE):
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         save_name = f"generated_{i}_{ts}.jpg"
                         save_path = os.path.join(BROWSER_WORKSPACE, save_name)
                         if _HAS_PIL:

@@ -114,6 +114,8 @@ async function authLogin() {
     }
     if (!data.token || data.token.length < 10) { showAuthMsg('Server returned invalid token', true); return; }
     localStorage.setItem('dartboard-jwt', data.token);
+    // Set JWT as cookie so <img src="/api/..."> requests authenticate through the proxy
+    document.cookie = `dartboard_token=${data.token}; path=/; SameSite=Strict; max-age=${60*60*24*7}`;
     hideAuthScreen();
     await Promise.allSettled([loadModels(), loadConversations(), loadToolCount(), loadPersonalities()]);
   } catch (e) { showAuthMsg('Connection error', true); }
@@ -148,6 +150,7 @@ function authLogout() {
   if (isStreaming) stopGeneration();
   // Clear auth token
   localStorage.removeItem('dartboard-jwt');
+  document.cookie = 'dartboard_token=; path=/; max-age=0';
   // Reset client state so the next login starts clean
   currentConvId = null;
   allConversations = [];
@@ -248,6 +251,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupDragDrop();
   const authed = await checkAuth();
   if (authed) {
+    // Ensure JWT cookie is set for <img src="/api/..."> auth
+    const jwt = localStorage.getItem('dartboard-jwt');
+    if (jwt) document.cookie = `dartboard_token=${jwt}; path=/; SameSite=Strict; max-age=${60*60*24*7}`;
     await Promise.all([loadModels(), loadConversations(), loadToolCount(), loadPersonalities()]);
   }
 });
