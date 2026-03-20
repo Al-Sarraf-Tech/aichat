@@ -51,7 +51,8 @@ class AppRouter {
       ..post('/api/warmup', _warmupModel)
       ..post('/api/unload', _unloadModel)
       ..get('/api/image/status', _imageStatus)
-      ..post('/api/image/generate', _imageGenerate);
+      ..post('/api/image/generate', _imageGenerate)
+      ..get('/api/image/download/<filename>', _imageDownload);
   }
 
   Handler get handler {
@@ -1081,9 +1082,26 @@ class AppRouter {
         final imgBytes = builder.takeBytes();
         // Cap at 50MB to prevent OOM
         if (imgBytes.length > 50 * 1024 * 1024) continue;
+        final b64 = base64Encode(imgBytes);
+        // Save to /app/pictures if directory exists
+        String? savedAs;
+        try {
+          final picDir = Directory('/app/pictures');
+          if (picDir.existsSync()) {
+            final ts = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:\-T]'), '').substring(0, 15);
+            final safePrompt = prompt.length > 30 ? prompt.substring(0, 30) : prompt;
+            final cleanPrompt = safePrompt.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
+            savedAs = '${model}_${ts}_$cleanPrompt.jpg';
+            File('${picDir.path}/$savedAs').writeAsBytesSync(imgBytes);
+            _log.info('Saved image to /app/pictures/$savedAs');
+          }
+        } catch (e) {
+          _log.warning('Failed to save image to /app/pictures: $e');
+        }
         images.add({
-          'data': base64Encode(imgBytes),
+          'data': b64,
           'filename': fname,
+          if (savedAs != null) 'savedAs': savedAs,
         });
       }
       _log.info('Image generate complete: ${images.length} images from $model');
@@ -1094,6 +1112,32 @@ class AppRouter {
     } finally {
       client.close();
     }
+  }
+
+  Future<Response> _imageDownload(Request request, String filename) async {
+    // Sanitize filename to prevent path traversal
+    final safe = filename.replaceAll(RegExp(r'[^a-zA-Z0-9_.\-]'), '');
+    if (safe.isEmpty || safe.contains('..')) {
+      return _json({'error': 'Invalid filename'}, status: 400);
+    }
+    final picDir = '/app/pictures';
+    final file = File('$picDir/$safe');
+    if (!file.existsSync()) {
+      return _json({'error': 'File not found'}, status: 404);
+    }
+    // Verify file is within pictures directory
+    final resolved = file.resolveSymbolicLinksSync();
+    if (!resolved.startsWith(picDir)) {
+      return Response.forbidden('Forbidden');
+    }
+    return Response.ok(
+      file.openRead(),
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'Content-Disposition': 'attachment; filename="$safe"',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    );
   }
 
   Map<String, dynamic> _buildComfyWorkflow({

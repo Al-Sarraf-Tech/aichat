@@ -1838,7 +1838,7 @@ html, body {
 }
 #ig-gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 12px;
 }
 .ig-image-card {
@@ -1883,8 +1883,70 @@ html, body {
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+/* ── Image Preview Panel ──────────────────────────────────────────── */
+#ig-preview {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+  position: relative;
+  min-height: 200px;
+}
+.ig-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+#ig-preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+}
+#ig-preview-placeholder svg { opacity: 0.4; }
+#ig-preview-placeholder span { font-size: 14px; }
+#ig-preview-img {
+  width: 100%;
+  display: block;
+  cursor: pointer;
+}
+#ig-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-main);
+}
+#ig-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+#ig-download-btn:hover { background: var(--accent-hover); }
+#ig-preview-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex: 1;
+  text-align: right;
+}
+
 @media (max-width: 768px) {
   .ig-container { grid-template-columns: 1fr; }
+  #ig-preview { min-height: 200px; }
+  #ig-gallery { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
   .ig-model-grid { grid-template-columns: 1fr; }
   #tab-nav { margin-right: 4px; }
   .tab-btn { padding: 6px 10px; font-size: 12px; }

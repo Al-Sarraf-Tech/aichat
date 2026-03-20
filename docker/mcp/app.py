@@ -5423,6 +5423,23 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                             with open(save_path, "wb") as fh:
                                 fh.write(img_bytes)
                         save_note = f"\n→ Saved as: {save_name}"
+                    # Also save to persistent pictures directory
+                    _pic_dir = "/app/pictures"
+                    if os.path.isdir(_pic_dir):
+                        try:
+                            _safe_prompt = prompt_text[:30].replace(" ", "_")
+                            _safe_prompt = "".join(c for c in _safe_prompt if c.isalnum() or c == "_")
+                            _pic_name = f"{model}_{ts}_{_safe_prompt}.jpg"
+                            _pic_path = os.path.join(_pic_dir, _pic_name)
+                            if _HAS_PIL:
+                                with _PilImage.open(_io.BytesIO(img_bytes)) as _pi:
+                                    _pi.convert("RGB").save(_pic_path, format="JPEG", quality=95)
+                            else:
+                                with open(_pic_path, "wb") as _pf:
+                                    _pf.write(img_bytes)
+                            save_note += f"\n→ Saved to pictures: {_pic_name}"
+                        except Exception:
+                            pass
                     # Convert to b64
                     if _HAS_PIL:
                         with _PilImage.open(_io.BytesIO(img_bytes)) as gi:

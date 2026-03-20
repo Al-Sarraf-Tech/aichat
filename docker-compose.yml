@@ -235,6 +235,7 @@ services:
     volumes:
       # Read/write the browser screenshot workspace
       - /docker/human_browser/workspace:/browser-workspace
+      - /home/jalsarraf/aipictures:/app/pictures
     depends_on:
       aichat-data:
         condition: service_healthy
@@ -423,6 +424,7 @@ services:
         condition: service_healthy
     volumes:
       - /mnt/nvmeINT/aichat/web-db:/app/data
+      - /home/jalsarraf/aipictures:/app/pictures
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8200/health || exit 1"]

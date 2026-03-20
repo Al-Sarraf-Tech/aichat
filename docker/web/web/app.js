@@ -1372,6 +1372,42 @@ function applyCustomPrompt() {
   closePersonalityModal();
 }
 
+
+// ── Image Download ────────────────────────────────────────────────
+let igCurrentPreview = null; // {src, filename, model, prompt}
+
+function downloadImage(src, filename) {
+  if (!src || !filename) return;
+  if (src.startsWith('data:')) {
+    const byteString = atob(src.split(',')[1]);
+    const mimeType = src.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const u8 = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) u8[i] = byteString.charCodeAt(i);
+    const blob = new Blob([ab], { type: mimeType });
+    const blobUrl = URL.createObjectURL(blob);
+    _triggerDownload(blobUrl, filename);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    return;
+  }
+  if (src.startsWith('blob:')) { _triggerDownload(src, filename); return; }
+  fetch(src).then(r => r.blob()).then(blob => {
+    const blobUrl = URL.createObjectURL(blob);
+    _triggerDownload(blobUrl, filename);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+  }).catch(() => window.open(src, '_blank'));
+}
+
+function _triggerDownload(href, filename) {
+  const a = document.createElement('a');
+  a.href = href; a.download = filename; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  requestAnimationFrame(() => a.remove());
+}
+
+function downloadCurrentImage() {
+  if (igCurrentPreview) downloadImage(igCurrentPreview.src, igCurrentPreview.filename);
+}
 // ── Tab Navigation ────────────────────────────────────────────────
 let currentTab = 'chat';
 
@@ -1485,7 +1521,7 @@ async function generateImage() {
     const d = await r.json();
     if (d.images && d.images.length > 0) {
       const gallery = document.getElementById('ig-gallery');
-      for (const img of d.images) {
+      d.images.forEach((img, i) => {
         const card = document.createElement('div');
         card.className = 'ig-image-card';
         const imgEl = document.createElement('img');
@@ -1493,25 +1529,12 @@ async function generateImage() {
         try {
           const bin = atob(img.data);
           const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
           const blob = new Blob([bytes], { type: 'image/jpeg' });
           imgEl.src = URL.createObjectURL(blob);
         } catch { imgEl.src = `data:image/jpeg;base64,${img.data}`; }
         imgEl.loading = 'lazy';
         imgEl.alt = prompt.slice(0, 100);
-        imgEl.onclick = () => {
-          document.querySelectorAll('.ig-lightbox').forEach(el => el.remove());
-          const lb = document.createElement('div');
-          lb.className = 'ig-lightbox';
-          lb.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;cursor:pointer';
-          const lbImg = document.createElement('img');
-          lbImg.src = imgEl.src;
-          lbImg.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px';
-          lb.appendChild(lbImg);
-          lb.onclick = () => lb.remove();
-          document.addEventListener('keydown', function _esc(e) { if (e.key === 'Escape') { lb.remove(); document.removeEventListener('keydown', _esc); } });
-          document.body.appendChild(lb);
-        };
         card.appendChild(imgEl);
         const info = document.createElement('div');
         info.className = 'ig-image-info';
@@ -1520,7 +1543,15 @@ async function generateImage() {
         if (d.seed !== undefined) info.innerHTML += ` &middot; seed: ${_esc(String(d.seed))}`;
         card.appendChild(info);
         gallery.prepend(card);
-      }
+        // Promote first image to preview
+        if (i === 0) {
+          setPreviewImage(imgEl.src, d.savedAs || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
+        }
+        // Click thumbnail to promote to preview
+        card.addEventListener('dblclick', () => {
+          setPreviewImage(imgEl.src, igCurrentPreview?.filename || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
+        });
+      });
       // Cap gallery at 50 images to prevent memory bloat
       while (gallery.children.length > 50) {
         const old = gallery.lastElementChild;
@@ -1542,6 +1573,82 @@ async function generateImage() {
     btn.disabled = false;
     btn.textContent = 'Generate';
     loading.classList.add('hidden');
+  }
+}
+
+function downloadCurrentImage() {
+  const previewImg = document.getElementById('ig-preview-img');
+  if (!previewImg || !previewImg.src) return;
+  const filename = previewImg.dataset.filename || `image_${Date.now()}.jpg`;
+  // If server saved the file, download from server endpoint
+  if (previewImg.dataset.filename) {
+    authFetch(`/api/image/download/${encodeURIComponent(previewImg.dataset.filename)}`)
+      .then(r => r.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => downloadFromSrc(previewImg.src, filename));
+  } else {
+    downloadFromSrc(previewImg.src, filename);
+  }
+}
+
+function setPreviewImage(src, filename, model, prompt) {
+  const preview = document.getElementById('ig-preview');
+  const img = document.getElementById('ig-preview-img');
+  const actions = document.getElementById('ig-preview-actions');
+  const placeholder = document.getElementById('ig-preview-placeholder');
+  const meta = document.getElementById('ig-preview-meta');
+  const modelNames = { flux_schnell: 'FLUX Schnell', flux_dev: 'FLUX Dev', sdxl_lightning: 'SDXL Lightning', sdxl_turbo: 'SDXL Turbo' };
+
+  img.src = src;
+  img.classList.remove('hidden');
+  img.onclick = () => {
+    document.querySelectorAll('.ig-lightbox').forEach(el => el.remove());
+    const lb = document.createElement('div');
+    lb.className = 'ig-lightbox';
+    lb.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;cursor:pointer';
+    const lbImg = document.createElement('img');
+    lbImg.src = src;
+    lbImg.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px';
+    lb.appendChild(lbImg);
+    lb.onclick = () => lb.remove();
+    document.addEventListener('keydown', function _esc(e) { if (e.key === 'Escape') { lb.remove(); document.removeEventListener('keydown', _esc); } });
+    document.body.appendChild(lb);
+  };
+  actions.classList.remove('hidden');
+  if (placeholder) placeholder.classList.add('hidden');
+  preview.classList.remove('ig-preview-empty');
+  const _e = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  meta.innerHTML = `${_e(modelNames[model] || model)} &middot; ${_e((prompt || '').slice(0, 60))}`;
+  igCurrentPreview = { src, filename, model, prompt };
+}
+
+function downloadFromSrc(src, filename) {
+  if (src.startsWith('blob:')) {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = filename;
+    a.click();
+  } else if (src.startsWith('data:')) {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = filename;
+    a.click();
+  } else {
+    fetch(src).then(r => r.blob()).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
   }
 }
 
