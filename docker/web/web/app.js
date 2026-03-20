@@ -1381,39 +1381,6 @@ function applyCustomPrompt() {
 
 // ── Image Download ────────────────────────────────────────────────
 let igCurrentPreview = null; // {src, filename, model, prompt}
-
-function downloadImage(src, filename) {
-  if (!src || !filename) return;
-  if (src.startsWith('data:')) {
-    const byteString = atob(src.split(',')[1]);
-    const mimeType = src.split(',')[0].split(':')[1].split(';')[0];
-    const ab = new ArrayBuffer(byteString.length);
-    const u8 = new Uint8Array(ab);
-    for (let i = 0; i < byteString.length; i++) u8[i] = byteString.charCodeAt(i);
-    const blob = new Blob([ab], { type: mimeType });
-    const blobUrl = URL.createObjectURL(blob);
-    _triggerDownload(blobUrl, filename);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-    return;
-  }
-  if (src.startsWith('blob:')) { _triggerDownload(src, filename); return; }
-  fetch(src).then(r => r.blob()).then(blob => {
-    const blobUrl = URL.createObjectURL(blob);
-    _triggerDownload(blobUrl, filename);
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-  }).catch(() => window.open(src, '_blank'));
-}
-
-function _triggerDownload(href, filename) {
-  const a = document.createElement('a');
-  a.href = href; a.download = filename; a.style.display = 'none';
-  document.body.appendChild(a); a.click();
-  requestAnimationFrame(() => a.remove());
-}
-
-function downloadCurrentImage() {
-  if (igCurrentPreview) downloadImage(igCurrentPreview.src, igCurrentPreview.filename);
-}
 // ── Tab Navigation ────────────────────────────────────────────────
 let currentTab = 'chat';
 
@@ -1617,6 +1584,7 @@ function setPreviewImage(src, filename, model, prompt) {
   const modelNames = { flux_schnell: 'FLUX Schnell', flux_dev: 'FLUX Dev', sdxl_lightning: 'SDXL Lightning', sdxl_turbo: 'SDXL Turbo' };
 
   img.src = src;
+  img.dataset.filename = filename || '';
   img.classList.remove('hidden');
   img.onclick = () => {
     document.querySelectorAll('.ig-lightbox').forEach(el => el.remove());
@@ -1640,18 +1608,15 @@ function setPreviewImage(src, filename, model, prompt) {
 }
 
 function downloadFromSrc(src, filename) {
-  if (src.startsWith('blob:')) {
-    const a = document.createElement('a');
-    a.href = src;
-    a.download = filename;
-    a.click();
-  } else if (src.startsWith('data:')) {
+  if (src.startsWith('blob:') || src.startsWith('data:')) {
     const a = document.createElement('a');
     a.href = src;
     a.download = filename;
     a.click();
   } else {
-    fetch(src).then(r => r.blob()).then(blob => {
+    // Use authFetch for /api/ URLs (needs JWT), plain fetch for external
+    const fetcher = src.startsWith('/api/') ? authFetch(src) : fetch(src);
+    fetcher.then(r => r.blob()).then(blob => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

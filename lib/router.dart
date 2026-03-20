@@ -1006,11 +1006,14 @@ class AppRouter {
     final seed = body['seed'] != null ? _toInt(body['seed'], -1) : null;
     _log.info('Image generate: model=$model, ${width}x$height, prompt="${prompt.length > 60 ? '${prompt.substring(0, 60)}...' : prompt}"');
 
+    // Compute effective seed so we can return it in the response
+    final effectiveSeed = seed ?? DateTime.now().millisecondsSinceEpoch % (1 << 32);
+
     final client = HttpClient();
     try {
       final workflow = _buildComfyWorkflow(
         model: model, prompt: prompt, negPrompt: negPrompt,
-        width: width, height: height, steps: steps, seed: seed,
+        width: width, height: height, steps: steps, seed: effectiveSeed,
       );
 
       // Submit prompt to ComfyUI
@@ -1107,7 +1110,7 @@ class AppRouter {
         });
       }
       _log.info('Image generate complete: ${images.length} images from $model');
-      return _json({'images': images, 'model': model, 'seed': seed});
+      return _json({'images': images, 'model': model, 'seed': effectiveSeed});
     } catch (e) {
       _log.severe('Image generate error: $e');
       return _json({'error': 'Generation failed: $e'}, status: 500);
@@ -1127,10 +1130,15 @@ class AppRouter {
     if (!file.existsSync()) {
       return _json({'error': 'File not found'}, status: 404);
     }
-    // Verify file is within pictures directory
-    final resolved = file.resolveSymbolicLinksSync();
-    if (!resolved.startsWith(picDir)) {
-      return Response.forbidden('Forbidden');
+    // Verify file is within pictures directory (use p.isWithin for safe prefix check)
+    try {
+      final resolved = file.resolveSymbolicLinksSync();
+      final resolvedDir = p.canonicalize(picDir);
+      if (!p.isWithin(resolvedDir, resolved) && resolved != resolvedDir) {
+        return Response.forbidden('Forbidden');
+      }
+    } catch (e) {
+      return _json({'error': 'File access error'}, status: 500);
     }
     return Response.ok(
       file.openRead(),
@@ -1151,7 +1159,7 @@ class AppRouter {
     int? steps,
     int? seed,
   }) {
-    final rng = seed ?? DateTime.now().millisecondsSinceEpoch % (1 << 32);
+    final rng = seed ?? 0; // seed should always be provided by caller now
     // Model configs
     const models = {
       'flux_schnell': {'unet': 'flux1-schnell.safetensors', 'steps': 4, 'cfg': 1.0, 'type': 'flux'},
