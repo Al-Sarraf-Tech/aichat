@@ -1099,9 +1099,11 @@ class AppRouter {
           _log.warning('Failed to save image to /app/pictures: $e');
         }
         images.add({
-          'data': b64,
+          // Only include base64 if no saved file (Cloudflare tunnels choke on large base64 payloads)
+          if (savedAs == null) 'data': b64,
           'filename': fname,
           if (savedAs != null) 'savedAs': savedAs,
+          if (savedAs != null) 'url': '/api/image/download/$savedAs',
         });
       }
       _log.info('Image generate complete: ${images.length} images from $model');

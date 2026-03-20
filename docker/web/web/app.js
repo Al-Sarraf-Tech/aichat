@@ -1525,14 +1525,18 @@ async function generateImage() {
         const card = document.createElement('div');
         card.className = 'ig-image-card';
         const imgEl = document.createElement('img');
-        // Convert base64 to blob URL to reduce DOM memory
-        try {
-          const bin = atob(img.data);
-          const bytes = new Uint8Array(bin.length);
-          for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
-          const blob = new Blob([bytes], { type: 'image/jpeg' });
-          imgEl.src = URL.createObjectURL(blob);
-        } catch { imgEl.src = `data:image/jpeg;base64,${img.data}`; }
+        // Prefer URL (small HTTP fetch) over inline base64 (Cloudflare-safe)
+        if (img.url) {
+          imgEl.src = img.url;
+        } else if (img.data) {
+          try {
+            const bin = atob(img.data);
+            const bytes = new Uint8Array(bin.length);
+            for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+            const blob = new Blob([bytes], { type: 'image/jpeg' });
+            imgEl.src = URL.createObjectURL(blob);
+          } catch { imgEl.src = `data:image/jpeg;base64,${img.data}`; }
+        }
         imgEl.loading = 'lazy';
         imgEl.alt = prompt.slice(0, 100);
         card.appendChild(imgEl);
