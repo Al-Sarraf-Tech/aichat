@@ -52,6 +52,7 @@ class AppRouter {
       ..post('/api/unload', _unloadModel)
       ..get('/api/image/status', _imageStatus)
       ..post('/api/image/generate', _imageGenerate)
+      ..get('/api/image/job/<jobId>', _imageJobStatus)
       ..get('/api/image/download/<filename>', _imageDownload);
   }
 
@@ -965,7 +966,9 @@ class AppRouter {
     return _json({'status': 'acknowledged', 'model': model});
   }
 
-  // ── Image Generation (ComfyUI Proxy) ──────────────────────────────
+  // ── Image Generation (Async Job System) ───────────────────────────
+  // Jobs are stored in memory. Each job has a status and result.
+  final Map<String, Map<String, dynamic>> _imageJobs = {};
 
   Future<Response> _imageStatus(Request request) async {
     if (config.comfyuiUrl.isEmpty) {
@@ -1004,16 +1007,38 @@ class AppRouter {
     final negPrompt = (body['negative_prompt'] as String?) ?? '';
     final steps = body['steps'] != null ? _toInt(body['steps'], 0) : null;
     final seed = body['seed'] != null ? _toInt(body['seed'], -1) : null;
-    _log.info('Image generate: model=$model, ${width}x$height, prompt="${prompt.length > 60 ? '${prompt.substring(0, 60)}...' : prompt}"');
-
-    // Compute effective seed so we can return it in the response
     final effectiveSeed = seed ?? DateTime.now().millisecondsSinceEpoch % (1 << 32);
 
+    // Create job and return immediately (Cloudflare-safe: tiny JSON, instant response)
+    final jobId = DateTime.now().millisecondsSinceEpoch.toRadixString(36) +
+        effectiveSeed.toRadixString(36);
+    _imageJobs[jobId] = {
+      'status': 'submitted',
+      'model': model,
+      'seed': effectiveSeed,
+      'prompt': prompt,
+    };
+    _log.info('Image job $jobId: model=$model, ${width}x$height');
+
+    // Run generation in background (does not block the HTTP response)
+    _runImageJob(jobId, model: model, prompt: prompt, negPrompt: negPrompt,
+        width: width, height: height, steps: steps, seed: effectiveSeed);
+
+    // Return instantly — client polls /api/image/job/<jobId>
+    return _json({'jobId': jobId, 'status': 'submitted'});
+  }
+
+  /// Background image generation — updates _imageJobs[jobId] when done.
+  Future<void> _runImageJob(String jobId, {
+    required String model, required String prompt, required String negPrompt,
+    required int width, required int height, int? steps, required int seed,
+  }) async {
+    _imageJobs[jobId]!['status'] = 'generating';
     final client = HttpClient();
     try {
       final workflow = _buildComfyWorkflow(
         model: model, prompt: prompt, negPrompt: negPrompt,
-        width: width, height: height, steps: steps, seed: effectiveSeed,
+        width: width, height: height, steps: steps, seed: seed,
       );
 
       // Submit prompt to ComfyUI
@@ -1023,15 +1048,17 @@ class AppRouter {
       final submitResp = await submitReq.close().timeout(const Duration(seconds: 30));
       final submitBody = await submitResp.transform(utf8.decoder).join();
       if (submitResp.statusCode != 200) {
-        return _json({'error': 'ComfyUI rejected workflow: $submitBody'}, status: 502);
+        _imageJobs[jobId] = {'status': 'error', 'error': 'ComfyUI rejected workflow'};
+        return;
       }
       final submitData = jsonDecode(submitBody);
       final promptId = submitData is Map ? submitData['prompt_id'] as String? : null;
       if (promptId == null || promptId.isEmpty) {
-        return _json({'error': 'ComfyUI did not return a prompt_id'}, status: 502);
+        _imageJobs[jobId] = {'status': 'error', 'error': 'No prompt_id returned'};
+        return;
       }
 
-      // Poll for completion (up to 300s)
+      // Poll ComfyUI for completion
       Map<String, dynamic>? outputs;
       for (var i = 0; i < 600; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
@@ -1046,27 +1073,27 @@ class AppRouter {
           if (entry is! Map) continue;
           final statusStr = (entry['status'] as Map?)?['status_str'] as String?;
           if (statusStr == 'error' || statusStr == 'failed' || statusStr == 'cancelled') {
-            return _json({'error': 'ComfyUI workflow $statusStr'}, status: 500);
+            _imageJobs[jobId] = {'status': 'error', 'error': 'ComfyUI: $statusStr'};
+            return;
           }
           final outs = entry['outputs'];
           if (outs is Map<String, dynamic> && outs.containsKey('9')) {
             outputs = outs;
             break;
           }
-        } on FormatException {
-          continue; // Malformed JSON from history — retry
-        } on TimeoutException {
-          continue; // Single poll timed out — retry
-        }
+        } on FormatException { continue; }
+        on TimeoutException { continue; }
       }
       if (outputs == null) {
-        return _json({'error': 'Generation timed out (300s)'}, status: 504);
+        _imageJobs[jobId] = {'status': 'error', 'error': 'Timed out (300s)'};
+        return;
       }
 
-      // Fetch generated images
+      // Fetch and save images
       final outputNode = outputs['9'];
       if (outputNode is! Map || outputNode['images'] is! List) {
-        return _json({'error': 'ComfyUI output missing images'}, status: 500);
+        _imageJobs[jobId] = {'status': 'error', 'error': 'No images in output'};
+        return;
       }
       final imageList = outputNode['images'] as List;
       final images = <Map<String, dynamic>>[];
@@ -1083,10 +1110,8 @@ class AppRouter {
         final builder = BytesBuilder(copy: false);
         await imgResp.forEach(builder.add);
         final imgBytes = builder.takeBytes();
-        // Cap at 50MB to prevent OOM
         if (imgBytes.length > 50 * 1024 * 1024) continue;
-        final b64 = base64Encode(imgBytes);
-        // Save to /app/pictures if directory exists
+        // Save to /app/pictures
         String? savedAs;
         try {
           final picDir = Directory('/app/pictures');
@@ -1096,27 +1121,45 @@ class AppRouter {
             final cleanPrompt = safePrompt.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
             savedAs = '${model}_${ts}_$cleanPrompt.jpg';
             File('${picDir.path}/$savedAs').writeAsBytesSync(imgBytes);
-            _log.info('Saved image to /app/pictures/$savedAs');
+            _log.info('Job $jobId: saved /app/pictures/$savedAs');
           }
         } catch (e) {
-          _log.warning('Failed to save image to /app/pictures: $e');
+          _log.warning('Job $jobId: save failed: $e');
         }
         images.add({
-          // Only include base64 if no saved file (Cloudflare tunnels choke on large base64 payloads)
-          if (savedAs == null) 'data': b64,
           'filename': fname,
           if (savedAs != null) 'savedAs': savedAs,
           if (savedAs != null) 'url': '/api/image/download/$savedAs',
         });
       }
-      _log.info('Image generate complete: ${images.length} images from $model');
-      return _json({'images': images, 'model': model, 'seed': effectiveSeed});
+      _imageJobs[jobId] = {
+        'status': 'done',
+        'images': images,
+        'model': model,
+        'seed': seed,
+      };
+      _log.info('Job $jobId: complete, ${images.length} images');
+      // Clean up old jobs (keep last 50)
+      if (_imageJobs.length > 50) {
+        final keys = _imageJobs.keys.toList();
+        for (var i = 0; i < keys.length - 50; i++) {
+          _imageJobs.remove(keys[i]);
+        }
+      }
     } catch (e) {
-      _log.severe('Image generate error: $e');
-      return _json({'error': 'Generation failed: $e'}, status: 500);
+      _log.severe('Job $jobId error: $e');
+      _imageJobs[jobId] = {'status': 'error', 'error': '$e'};
     } finally {
       client.close();
     }
+  }
+
+  Future<Response> _imageJobStatus(Request request, String jobId) async {
+    final job = _imageJobs[jobId];
+    if (job == null) {
+      return _json({'status': 'not_found', 'error': 'Job not found'}, status: 404);
+    }
+    return _json(job);
   }
 
   Future<Response> _imageDownload(Request request, String filename) async {

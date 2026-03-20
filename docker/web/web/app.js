@@ -1480,6 +1480,7 @@ async function generateImage() {
   const seed = document.getElementById('ig-seed').value;
   if (seed) body.seed = parseInt(seed);
   try {
+    // Step 1: Submit job (instant response, no Cloudflare timeout)
     const r = await authFetch('/api/image/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1491,60 +1492,73 @@ async function generateImage() {
       try { errMsg = JSON.parse(errText).error; } catch { errMsg = errText.slice(0, 200); }
       throw new Error(errMsg || `HTTP ${r.status}`);
     }
-    const d = await r.json();
-    if (d.images && d.images.length > 0) {
-      const gallery = document.getElementById('ig-gallery');
-      d.images.forEach((img, i) => {
-        const card = document.createElement('div');
-        card.className = 'ig-image-card';
-        const imgEl = document.createElement('img');
-        // Fetch image via authFetch (sends JWT) then convert to blob URL
-        if (img.url) {
-          authFetch(img.url).then(r => r.blob()).then(blob => {
-            imgEl.src = URL.createObjectURL(blob);
-          }).catch(() => { imgEl.src = img.url; }); // fallback to direct URL
-        } else if (img.data) {
-          try {
-            const bin = atob(img.data);
-            const bytes = new Uint8Array(bin.length);
-            for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
-            const blob = new Blob([bytes], { type: 'image/jpeg' });
-            imgEl.src = URL.createObjectURL(blob);
-          } catch { imgEl.src = `data:image/jpeg;base64,${img.data}`; }
-        }
-        imgEl.loading = 'lazy';
-        imgEl.alt = prompt.slice(0, 100);
-        card.appendChild(imgEl);
-        const info = document.createElement('div');
-        info.className = 'ig-image-info';
-        const _esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        info.innerHTML = `<span class="ig-image-model">${_esc(modelNames[igSelectedModel] || igSelectedModel)}</span> &middot; ${_esc(prompt.slice(0, 80))}${prompt.length > 80 ? '...' : ''}`;
-        if (d.seed !== undefined) info.innerHTML += ` &middot; seed: ${_esc(String(d.seed))}`;
-        card.appendChild(info);
-        gallery.prepend(card);
-        // Promote first image to preview
-        if (i === 0) {
-          setPreviewImage(imgEl.src, d.savedAs || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
-        }
-        // Click thumbnail to promote to preview
-        card.addEventListener('dblclick', () => {
-          setPreviewImage(imgEl.src, igCurrentPreview?.filename || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
-        });
-      });
-      // Cap gallery at 50 images to prevent memory bloat
-      while (gallery.children.length > 50) {
-        const old = gallery.lastElementChild;
-        const oldImg = old?.querySelector('img');
-        if (oldImg?.src?.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
-        old.remove();
+    const submit = await r.json();
+    if (!submit.jobId) throw new Error(submit.error || 'No job ID returned');
+
+    // Step 2: Poll for completion (small GETs every 2s, Cloudflare-safe)
+    loadingText.textContent = `Generating with ${modelNames[igSelectedModel] || igSelectedModel}...`;
+    let job = null;
+    for (let poll = 0; poll < 180; poll++) { // 180 * 2s = 360s max
+      await new Promise(ok => setTimeout(ok, 2000));
+      if (!igGenerating) break; // cancelled
+      try {
+        const pr = await authFetch(`/api/image/job/${submit.jobId}`);
+        job = await pr.json();
+        if (job.status === 'done' || job.status === 'error') break;
+        loadingText.textContent = `Generating with ${modelNames[igSelectedModel] || igSelectedModel}... (${poll * 2}s)`;
+      } catch { /* poll failed, retry */ }
+    }
+    if (!job || job.status !== 'done') {
+      throw new Error(job?.error || 'Generation timed out');
+    }
+
+    // Step 3: Render images
+    const gallery = document.getElementById('ig-gallery');
+    const images = job.images || [];
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      const card = document.createElement('div');
+      card.className = 'ig-image-card';
+      const imgEl = document.createElement('img');
+      // Fetch image via authFetch (sends JWT) then convert to blob URL
+      if (img.url) {
+        try {
+          const imgR = await authFetch(img.url);
+          const blob = await imgR.blob();
+          imgEl.src = URL.createObjectURL(blob);
+        } catch { imgEl.src = img.url; }
       }
-      dot.className = 'ig-status-dot';
-    } else {
-      dot.className = 'ig-status-dot error';
-      document.getElementById('ig-status-text').textContent = d.error || 'No images returned — try a different prompt';
+      imgEl.loading = 'lazy';
+      imgEl.alt = prompt.slice(0, 100);
+      card.appendChild(imgEl);
+      const info = document.createElement('div');
+      info.className = 'ig-image-info';
+      const _esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      info.innerHTML = `<span class="ig-image-model">${_esc(modelNames[igSelectedModel] || igSelectedModel)}</span> &middot; ${_esc(prompt.slice(0, 80))}${prompt.length > 80 ? '...' : ''}`;
+      if (job.seed !== undefined) info.innerHTML += ` &middot; seed: ${_esc(String(job.seed))}`;
+      card.appendChild(info);
+      gallery.prepend(card);
+      // Promote first image to preview
+      if (i === 0) {
+        setPreviewImage(imgEl.src, img.savedAs || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
+      }
+      card.addEventListener('dblclick', () => {
+        setPreviewImage(imgEl.src, img.savedAs || `${igSelectedModel}_${Date.now()}.jpg`, igSelectedModel, prompt);
+      });
+    }
+    // Cap gallery
+    while (gallery.children.length > 50) {
+      const old = gallery.lastElementChild;
+      const oldImg = old?.querySelector('img');
+      if (oldImg?.src?.startsWith('blob:')) URL.revokeObjectURL(oldImg.src);
+      old.remove();
+    }
+    dot.className = 'ig-status-dot';
+    if (images.length === 0) {
+      document.getElementById('ig-status-text').textContent = 'No images returned';
     }
   } catch (e) {
-    if (e.message === 'Not authenticated') return; // auth screen already shown
+    if (e.message === 'Not authenticated') return;
     dot.className = 'ig-status-dot error';
     document.getElementById('ig-status-text').textContent = e.message || 'Generation failed';
   } finally {
