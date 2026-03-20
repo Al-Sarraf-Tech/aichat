@@ -1498,9 +1498,11 @@ async function generateImage() {
         const card = document.createElement('div');
         card.className = 'ig-image-card';
         const imgEl = document.createElement('img');
-        // Prefer URL (small HTTP fetch) over inline base64 (Cloudflare-safe)
+        // Fetch image via authFetch (sends JWT) then convert to blob URL
         if (img.url) {
-          imgEl.src = img.url;
+          authFetch(img.url).then(r => r.blob()).then(blob => {
+            imgEl.src = URL.createObjectURL(blob);
+          }).catch(() => { imgEl.src = img.url; }); // fallback to direct URL
         } else if (img.data) {
           try {
             const bin = atob(img.data);
@@ -1583,7 +1585,14 @@ function setPreviewImage(src, filename, model, prompt) {
   const meta = document.getElementById('ig-preview-meta');
   const modelNames = { flux_schnell: 'FLUX Schnell', flux_dev: 'FLUX Dev', sdxl_lightning: 'SDXL Lightning', sdxl_turbo: 'SDXL Turbo' };
 
-  img.src = src;
+  // If src is an API URL, fetch via authFetch to get blob URL (avoids Cloudflare/auth issues)
+  if (src.startsWith('/api/')) {
+    authFetch(src).then(r => r.blob()).then(blob => {
+      img.src = URL.createObjectURL(blob);
+    }).catch(() => { img.src = src; });
+  } else {
+    img.src = src;
+  }
   img.dataset.filename = filename || '';
   img.classList.remove('hidden');
   img.onclick = () => {
