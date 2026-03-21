@@ -243,7 +243,31 @@ def health() -> dict:
             p.split(":")[0].strip().replace("VAProfile", "")
             for p in encode_profiles
         })
+    result["sdxl_turbo"] = {
+        "available": os.path.isdir(_SDXL_MODEL_DIR),
+        "loaded": _sdxl_pipeline is not None,
+    }
     return result
+
+
+@app.post("/unload")
+def unload_models() -> dict:
+    """Release GPU models from memory. They lazy-reload on next request."""
+    global _clip_session, _sdxl_pipeline
+    unloaded = []
+    if _clip_session is not None:
+        _clip_session = None
+        unloaded.append("clip_vit_b32")
+        log.info("CLIP ONNX session released (TTL unload)")
+    with _sdxl_lock:  # wait for any active inference to finish
+        if _sdxl_pipeline is not None:
+            del _sdxl_pipeline
+            _sdxl_pipeline = None
+            unloaded.append("sdxl_turbo_openvino")
+            log.info("SDXL Turbo OpenVINO pipeline released (TTL unload)")
+    import gc
+    gc.collect()
+    return {"ok": True, "unloaded": unloaded}
 
 
 @app.post("/info")
@@ -1061,3 +1085,130 @@ async def detect_humans(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 app.include_router(detect_router)
+
+
+# ---------------------------------------------------------------------------
+# Image Generation — SDXL Turbo via OpenVINO on Intel Arc A380
+# ---------------------------------------------------------------------------
+
+generate_router = APIRouter(prefix="/generate", tags=["generate"])
+
+# Lazy-loaded OpenVINO SDXL Turbo pipeline (thread-safe)
+_sdxl_pipeline: Any = None
+_SDXL_MODEL_DIR = os.environ.get("SDXL_TURBO_MODEL_DIR", "/app/models/sdxl_turbo")
+
+import threading
+_sdxl_lock = threading.Lock()  # guards load, inference, and unload
+
+
+def _get_sdxl_pipeline() -> Any:
+    """Lazy-load SDXL Turbo via OpenVINO (double-checked locking)."""
+    global _sdxl_pipeline
+    if _sdxl_pipeline is not None:
+        return _sdxl_pipeline
+    with _sdxl_lock:
+        if _sdxl_pipeline is not None:  # double-check after acquiring lock
+            return _sdxl_pipeline
+        # F8: verify model files exist before attempting load
+        idx = os.path.join(_SDXL_MODEL_DIR, "model_index.json")
+        if not os.path.isfile(idx):
+            raise FileNotFoundError(f"SDXL model not found: {idx}")
+        from optimum.intel.openvino import OVStableDiffusionXLPipeline
+        for device in ("GPU", "CPU"):
+            try:
+                _sdxl_pipeline = OVStableDiffusionXLPipeline.from_pretrained(
+                    _SDXL_MODEL_DIR,
+                    device=device,
+                    ov_config={"CACHE_DIR": "/tmp/ov_cache"},
+                )
+                log.info("SDXL Turbo OpenVINO pipeline loaded: dir=%s, device=%s", _SDXL_MODEL_DIR, device)
+                return _sdxl_pipeline
+            except Exception as exc:
+                log.warning("SDXL Turbo failed to load on %s: %s", device, exc)
+                if device == "CPU":
+                    raise
+    return _sdxl_pipeline
+
+
+@generate_router.get("/health")
+def generate_health() -> dict[str, Any]:
+    model_exists = os.path.isdir(_SDXL_MODEL_DIR) and os.path.isfile(
+        os.path.join(_SDXL_MODEL_DIR, "model_index.json")
+    )
+    return {
+        "status": "ok" if model_exists else "model_missing",
+        "model": "sdxl-turbo-openvino",
+        "model_dir": _SDXL_MODEL_DIR,
+        "model_exists": model_exists,
+        "loaded": _sdxl_pipeline is not None,
+        "device": "intel-arc-a380",
+        "max_resolution": "512x512",
+    }
+
+
+@generate_router.post("")
+async def generate_image(payload: dict[str, Any]) -> dict[str, Any]:
+    """Generate image via SDXL Turbo on Intel Arc A380 (OpenVINO)."""
+    import random
+    import time as _time
+
+    prompt = str(payload.get("prompt", "")).strip()
+    if not prompt:
+        raise HTTPException(422, "'prompt' is required")
+
+    width = min(int(payload.get("width", 512)), 512)
+    height = min(int(payload.get("height", 512)), 512)
+    steps = max(1, min(int(payload.get("steps", 1)), 4))
+    neg = str(payload.get("negative_prompt", "")).strip() or None
+    seed_val = payload.get("seed")
+    seed = int(seed_val) if seed_val is not None and int(seed_val) >= 0 else random.randint(0, 2**32 - 1)
+
+    import numpy as np
+    loop = asyncio.get_event_loop()
+    t0 = _time.monotonic()
+
+    def _run():
+        pipe = _get_sdxl_pipeline()
+        if pipe is None:
+            raise HTTPException(503, "SDXL pipeline not available")
+        generator = np.random.RandomState(seed)
+        with _sdxl_lock:  # serialize inference — pipeline is not thread-safe
+            try:
+                result = pipe(
+                    prompt=prompt,
+                    negative_prompt=neg,
+                    num_inference_steps=steps,
+                    guidance_scale=0.0,
+                    width=width,
+                    height=height,
+                    generator=generator,
+                )
+            except RuntimeError as exc:
+                if "out of memory" in str(exc).lower() or "alloc" in str(exc).lower():
+                    raise HTTPException(507, f"GPU out of memory: {exc}")
+                raise
+        return result.images[0]
+
+    pil_image = await loop.run_in_executor(None, _run)
+    elapsed_ms = (_time.monotonic() - t0) * 1000
+
+    buf = io.BytesIO()
+    pil_image.save(buf, format="JPEG", quality=92)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    log.info("SDXL Turbo generate: %dx%d, %d steps, seed=%d, %.0fms",
+             width, height, steps, seed, elapsed_ms)
+
+    return {
+        "image_base64": b64,
+        "model": "sdxl-turbo-openvino",
+        "device": "intel-arc-a380",
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "seed": seed,
+        "elapsed_ms": round(elapsed_ms),
+    }
+
+
+app.include_router(generate_router)

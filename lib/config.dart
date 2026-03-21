@@ -25,6 +25,9 @@ class Config {
   /// ComfyUI URL for dedicated image generation. Empty = disabled.
   final String comfyuiUrl;
 
+  /// Vision service /generate URL for Arc A380 local image gen. Empty = disabled.
+  final String visionGenUrl;
+
   Config({
     required this.lmStudioUrl,
     required this.lmStudioFallbackUrl,
@@ -43,6 +46,7 @@ class Config {
     required this.maxLoadedModels,
     required this.toolRouterUrl,
     required this.comfyuiUrl,
+    required this.visionGenUrl,
   });
 
   factory Config.fromEnv() {
@@ -70,6 +74,7 @@ class Config {
       maxLoadedModels: int.tryParse(env['LM_STUDIO_MAX_LOADED'] ?? '') ?? 2,
       toolRouterUrl: env['TOOL_ROUTER_URL'] ?? '',
       comfyuiUrl: env['COMFYUI_URL'] ?? '',
+      visionGenUrl: env['VISION_GEN_URL'] ?? '',
     );
   }
 }

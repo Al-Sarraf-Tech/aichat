@@ -900,6 +900,26 @@ _current_request_id: _contextvars.ContextVar[str] = _contextvars.ContextVar(
 )
 
 _orchestrator_instance = None  # type: ignore[assignment]
+_gpu_ttl_initialized = False
+
+
+def _get_gpu_ttl():
+    """Lazy singleton — starts background watcher on first call."""
+    global _gpu_ttl_initialized
+    try:
+        if not _gpu_ttl_initialized:
+            _gpu_ttl_initialized = True
+            from gpu_ttl import init_watcher
+            init_watcher(
+                comfyui_url=COMFYUI_URL,
+                lm_studio_url=IMAGE_GEN_BASE_URL,
+                vision_url=VIDEO_URL,
+            )
+        from gpu_ttl import get_watcher
+        return get_watcher()
+    except Exception as exc:
+        _logging.getLogger("aichat-mcp").warning("GPU TTL watcher unavailable: %s", exc)
+        return None
 
 
 def _get_orchestrator():
@@ -5331,7 +5351,7 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                             "seed": _seed, "steps": _steps, "cfg": cfg["cfg"],
                             "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
                             "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
-                        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "fp16"}},
+                        "4": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "default"}},
                         "5": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
                         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt_text, "clip": ["11", 0]}},
                         "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt, "clip": ["11", 0]}},
@@ -5481,7 +5501,7 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     _w, _h = (int(x) for x in size.split("x"))
                 except Exception:
                     _w, _h = 1024, 1024
-                # --- ComfyUI path (preferred) ---
+                # --- ComfyUI path (all image generation on RTX 3090) ---
                 if COMFYUI_URL:
                     # Map model arg to ComfyUI model name
                     _comfy_models = ["flux_schnell", "flux_dev", "sdxl_lightning", "sdxl_turbo"]
@@ -5490,6 +5510,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                         # Quick health check
                         _hc = await c.get(f"{COMFYUI_URL}/system_stats", timeout=5.0)
                         if _hc.status_code == 200:
+                            _ttlw = _get_gpu_ttl()
+                            if _ttlw: _ttlw.touch_comfyui()
                             return await _comfyui_generate(
                                 client=c, prompt_text=prompt, model=comfy_model,
                                 width=_w, height=_h, steps=int(steps) if steps else None,
@@ -5520,6 +5542,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     r = await c.post(gen_url, json=payload, timeout=180.0)
                     r.raise_for_status()
                     data = r.json()
+                    _ttlw = _get_gpu_ttl()
+                    if _ttlw: _ttlw.touch_lm_studio(model or "image_gen")
                 except Exception as exc:
                     return _text(
                         f"image_generate failed: {exc}\n"
@@ -7080,6 +7104,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
             # image_caption — vision model image description
             # ----------------------------------------------------------------
             if name == "image_caption":
+                _ttlw = _get_gpu_ttl()
+                if _ttlw: _ttlw.touch_lm_studio("vision")
                 b64_ic     = str(args.get("b64", "")).strip()
                 detail_ic  = str(args.get("detail_level", "detailed")).strip() or "detailed"
                 if not b64_ic:
@@ -8850,6 +8876,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
             # detect_objects — YOLOv8n object detection
             # ================================================================
             if name == "detect_objects":
+                _ttlw = _get_gpu_ttl()
+                if _ttlw: _ttlw.touch_vision()
                 try:
                     do_payload: dict[str, Any] = {}
                     for k_do in ("image_base64", "image_url", "confidence", "classes"):
@@ -8873,6 +8901,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
             # detect_humans — human/person detection
             # ================================================================
             if name == "detect_humans":
+                _ttlw = _get_gpu_ttl()
+                if _ttlw: _ttlw.touch_vision()
                 try:
                     dh_payload: dict[str, Any] = {}
                     for k_dh in ("image_base64", "image_url", "confidence"):
@@ -9242,4 +9272,5 @@ async def health() -> dict:
             "gpu_pressure": _get_orchestrator().resource_state().gpu_pressure,
             "cpu_pressure": _get_orchestrator().resource_state().cpu_pressure,
         },
+        "gpu_ttl": (lambda w: w.status() if w else {"enabled": False})(_get_gpu_ttl()),
     }

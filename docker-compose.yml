@@ -82,11 +82,13 @@ services:
       WORKSPACE: /workspace
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
+      SDXL_TURBO_MODEL_DIR: /app/models/sdxl_turbo
     depends_on:
       aichat-data:
         condition: service_healthy
     volumes:
       - /docker/human_browser/workspace:/workspace:rw
+      - /mnt/nvmeINT/models/sdxl_turbo_ov:/app/models/sdxl_turbo:ro
     # Intel Arc A380: FFmpeg VA-API hw decode/encode + Tesseract OpenCL preprocessing.
     devices:
       - ${INTEL_DRI_DEVICE:-/dev/dri}:${INTEL_DRI_DEVICE:-/dev/dri}
@@ -217,6 +219,12 @@ services:
       # ComfyUI — dedicated diffusion server on WSL2 RTX 3090 (preferred for image gen)
       COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8188}"
       EMBED_MODEL: "${EMBED_MODEL:-}"
+      # GPU idle TTL — auto-unload models after idle period (seconds, 0=disable)
+      GPU_IDLE_TTL: "${GPU_IDLE_TTL:-600}"
+      GPU_TTL_POLL_INTERVAL: "${GPU_TTL_POLL_INTERVAL:-60}"
+      GPU_TTL_ENABLED: "${GPU_TTL_ENABLED:-true}"
+      # Arc A380 local image generation (OpenVINO SDXL Turbo)
+      VISION_GEN_URL: http://aichat-vision:8099/generate
       # MinIO S3-compatible object store for image pipeline
       MINIO_URL: http://aichat-minio:9002
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -415,6 +423,7 @@ services:
       LM_STUDIO_URL: http://192.168.50.2:1234
       LM_STUDIO_FALLBACK_URL: http://100.78.39.76:1234
       COMFYUI_URL: "${COMFYUI_URL:-http://100.91.44.100:8188}"
+      VISION_GEN_URL: http://aichat-vision:8099/generate
       DB_PATH: /app/data/dartboard.db
       WEB_DIR: /app/web
     extra_hosts:

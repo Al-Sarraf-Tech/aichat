@@ -1036,6 +1036,7 @@ class AppRouter {
     _imageJobs[jobId]!['status'] = 'generating';
     final client = HttpClient();
     try {
+      // --- ComfyUI path (all image generation on RTX 3090) ---
       final workflow = _buildComfyWorkflow(
         model: model, prompt: prompt, negPrompt: negPrompt,
         width: width, height: height, steps: steps, seed: seed,
@@ -1058,9 +1059,9 @@ class AppRouter {
         return;
       }
 
-      // Poll ComfyUI for completion
+      // Poll ComfyUI for completion (up to 600s for cold FLUX loads)
       Map<String, dynamic>? outputs;
-      for (var i = 0; i < 600; i++) {
+      for (var i = 0; i < 1200; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         try {
           final histReq = await client.getUrl(Uri.parse('${config.comfyuiUrl}/history/$promptId'));
@@ -1085,13 +1086,14 @@ class AppRouter {
         on TimeoutException { continue; }
       }
       if (outputs == null) {
-        _imageJobs[jobId] = {'status': 'error', 'error': 'Timed out (300s)'};
+        _imageJobs[jobId] = {'status': 'error', 'error': 'Timed out (600s)'};
         return;
       }
 
       // Fetch and save images
       final outputNode = outputs['9'];
-      if (outputNode is! Map || outputNode['images'] is! List) {
+      if (outputNode is! Map || outputNode['images'] is! List ||
+          (outputNode['images'] as List).isEmpty) {
         _imageJobs[jobId] = {'status': 'error', 'error': 'No images in output'};
         return;
       }
@@ -1220,7 +1222,7 @@ class AppRouter {
         '3': {'class_type': 'KSampler', 'inputs': {
           'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'simple', 'denoise': 1.0,
           'model': ['4', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['5', 0]}},
-        '4': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'fp16'}},
+        '4': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'default'}},
         '5': {'class_type': 'EmptySD3LatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}},
         '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['11', 0]}},
         '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['11', 0]}},

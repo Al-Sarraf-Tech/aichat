@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
 # FFmpeg + Tesseract + Intel VA-API (iHD driver) + Poppler (pdf2image)
+# Intel GPU compute (OpenCL/Level Zero) is accessed via /dev/dri device passthrough.
+# OpenVINO bundles its own GPU plugin; host Intel compute runtime is shared via /dev/dri.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         tesseract-ocr tesseract-ocr-eng \
