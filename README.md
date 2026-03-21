@@ -15,6 +15,8 @@ A **local-first AI chat platform** with two interfaces:
 
 Both interfaces connect to [LM Studio](https://lmstudio.ai) for local LLM inference (no cloud dependency) and share a unified MCP tool server with 16 mega-tools backed by real services: web search, image search, browser automation, code execution, persistent memory, knowledge graphs, vector search, PDF processing, and more.
 
+Image generation runs on [ComfyUI](https://github.com/comfyanonymous/ComfyUI) via an RTX 3090 with FLUX Schnell and SDXL models. GPU resources are automatically managed — models unload after 10 minutes of idle time and reload on demand.
+
 ---
 
 ## Table of Contents
@@ -29,8 +31,10 @@ Both interfaces connect to [LM Studio](https://lmstudio.ai) for local LLM infere
 - [Configuration](#configuration)
 - [Web UI](#web-ui)
 - [TUI Usage](#tui-usage)
+- [Image Generation](#image-generation)
+- [GPU Resource Management](#gpu-resource-management)
 - [Arc A380 Preprocessing](#arc-a380-preprocessing)
-- [Image Pipeline](#image-pipeline)
+- [Image Search Pipeline](#image-search-pipeline)
 - [Personalities](#personalities)
 - [CI/CD Pipeline](#cicd-pipeline)
 - [Development](#development)
@@ -95,6 +99,13 @@ Both interfaces connect to [LM Studio](https://lmstudio.ai) for local LLM infere
                   │  Main inference — all models  │
                   │  JIST auto-load/swap          │
                   └──────────────────────────────┘
+
+                  ┌──────────────────────────────┐
+                  │  ComfyUI  (RTX 3090)         │
+                  │  100.91.44.100:8188           │
+                  │  FLUX Schnell, SDXL Turbo     │
+                  │  SDXL Lightning, FLUX Dev     │
+                  └──────────────────────────────┘
 ```
 
 ---
@@ -146,6 +157,8 @@ This platform is designed for a **two-GPU split architecture** across a local ne
 └────────────────────────────────────────────┘
 ```
 
+The workstation also runs **ComfyUI** (WSL2, `:8188`) for image generation with FLUX Schnell, SDXL Turbo, and SDXL Lightning models. Models auto-unload after 10 minutes of idle time via the GPU TTL watcher.
+
 ### Request Flow
 
 ```
@@ -155,8 +168,9 @@ User browser → :8200 (aichat-auth, JWT check)
     → aichat-mcp :8096 (tool execution)
       → aichat-searxng (web/image search)
       → aichat-browser (page scraping)
-      → aichat-vision (OCR, face detect)
+      → aichat-vision (OCR, face detect, CLIP embeddings)
       → aichat-sandbox (code execution)
+      → ComfyUI :8188 (image generation — FLUX/SDXL)
     → RTX 3090 :1234 (main LLM generation, SSE streaming)
   ← SSE tokens stream back to browser
 ```
@@ -181,7 +195,7 @@ You can run everything on a single machine — just point `LM_STUDIO_URL` and `T
 | `aichat-vector` | 6333 | `/mnt/nvmeINT/aichat/qdrant/` | Qdrant — semantic search, CLIP embeddings |
 | `aichat-redis` | 6379 | `/mnt/nvmeINT/aichat/redis/` | Valkey — context compaction cache, tool routing cache |
 | `aichat-data` | 8091 | — | Consolidated data API: memory, articles, graph, planner, jobs, research |
-| `aichat-vision` | 8099 | — | OCR (Tesseract), face detection (OpenCV), video analysis |
+| `aichat-vision` | 8099 | — | OCR (Tesseract), CLIP embeddings (OpenVINO), object detection (YOLOv8n), video analysis, OpenVINO SDXL Turbo endpoint |
 | `aichat-docs` | 8101 | — | Document ingestion, PDF extraction, full-text search |
 | `aichat-sandbox` | 8095 | — | Isolated code execution: Python, bash, JavaScript |
 | `aichat-searxng` | 8080 | — | Self-hosted meta-search (DuckDuckGo, Bing, Google) |
@@ -292,6 +306,8 @@ ADMIN_USER=your_username
 ADMIN_INITIAL_PASSWORD=your_password_here
 IMAGE_GEN_BASE_URL=http://your-lm-studio-host:1234
 IMAGE_GEN_MODEL=openai/gpt-oss-20b
+# Optional: ComfyUI for high-quality image generation (FLUX/SDXL)
+COMFYUI_URL=http://your-comfyui-host:8188
 EOF
 ```
 
@@ -345,6 +361,10 @@ aichat "question"   # one-shot chat
 | `TOOL_ROUTER_URL` | web | — | Arc A380 URL (empty = rule-based routing) |
 | `MCP_URL` | web | `http://aichat-mcp:8096` | MCP server URL |
 | `MAX_TOOL_ITERATIONS` | web | `4` | Max tool call loops per request |
+| `COMFYUI_URL` | mcp, web | *(see compose)* | ComfyUI endpoint for image generation |
+| `GPU_IDLE_TTL` | mcp | `600` | Seconds before idle GPU models auto-unload |
+| `GPU_TTL_ENABLED` | mcp | `true` | Enable/disable GPU auto-unload |
+| `VISION_GEN_URL` | mcp, web | *(internal)* | Vision service OpenVINO generate endpoint |
 
 ### Adapting to Your Hardware
 
@@ -426,6 +446,96 @@ Subcommands:
 
 ---
 
+## Image Generation
+
+Image generation runs on **ComfyUI** (WSL2, RTX 3090) with dynamic workflow construction. Both the Dart web backend and the MCP tool server can submit workflows.
+
+### Supported Models
+
+| Model | Steps | Resolution | Speed (cached) | Notes |
+|-------|-------|-----------|----------------|-------|
+| FLUX Schnell | 4 | 1024x1024 | ~40s | Best quality, default |
+| FLUX Dev | 25 | 1024x1024 | ~90s | Highest quality, slowest |
+| SDXL Lightning | 4 | 1024x1024 | ~3s | Fast, good quality |
+| SDXL Turbo | 1 | 512x512 | ~3s | Fastest, draft quality |
+
+### How It Works
+
+1. User submits a prompt via the web UI image generation panel or MCP `image_generate` tool
+2. The Dart backend creates an async job, returns a `jobId` immediately (Cloudflare-safe)
+3. A background task builds a ComfyUI workflow JSON dynamically based on the selected model
+4. The workflow is submitted to ComfyUI's `/prompt` API
+5. The backend polls `/history/{promptId}` every 500ms until complete (up to 600s timeout)
+6. Generated images are fetched from ComfyUI, saved to `/app/pictures/`, and returned as download URLs
+7. The frontend polls `/api/image/job/{jobId}` every 2s to display progress and results
+
+### ComfyUI Configuration
+
+ComfyUI runs in Docker on WSL2 with these optimizations for the 32GB RAM / 24GB VRAM environment:
+
+```
+--disable-pinned-memory    # prevents 30GB pinned RAM allocation (OOM prevention)
+--disable-async-offload    # reduces stream memory overhead
+--fp8_e4m3fn-unet          # halves UNET memory (12GB → 6GB)
+--fp8_e4m3fn-text-enc      # halves CLIP encoder (9.3GB → 5GB)
+--cpu-vae                  # offloads VAE decode to CPU
+```
+
+Compose file: `vision/compose/comfyui/docker-compose.yml` on WSL2.
+
+### Fallback Chain
+
+```
+ComfyUI (preferred) → LM Studio /v1/images/generations (fallback) → error
+```
+
+---
+
+## GPU Resource Management
+
+A background **GPU TTL watcher** (`docker/mcp/gpu_ttl.py`) automatically unloads GPU models after 10 minutes of inactivity across all three GPU systems:
+
+| System | What's Monitored | Unload Method |
+|--------|-----------------|---------------|
+| ComfyUI (RTX 3090) | VRAM usage via `/system_stats` + queue via `/queue` | `POST /free` |
+| LM Studio (RTX 3090) | Per-model loaded state via `/api/v0/models` | `POST /api/v0/models/unload` |
+| aichat-vision (Arc A380) | CLIP + SDXL pipeline state | `POST /unload` |
+
+### Configuration
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `GPU_IDLE_TTL` | `600` | Seconds before idle models are unloaded (10 min) |
+| `GPU_TTL_POLL_INTERVAL` | `60` | How often to check idle state (seconds) |
+| `GPU_TTL_ENABLED` | `true` | Kill switch to disable auto-unload |
+
+### Safety Guards
+
+- Checks ComfyUI `/queue` before unloading (prevents mid-generation unload)
+- Re-checks idle timestamp immediately before POST to prevent race conditions
+- Fail-open: if any API is unreachable, skips that check (never unloads on assumption)
+- All unload events logged at INFO level
+
+### Monitoring
+
+The `/health` endpoint on the MCP service includes GPU TTL status:
+
+```json
+{
+  "gpu_ttl": {
+    "enabled": true,
+    "ttl_seconds": 600,
+    "comfyui_idle_seconds": 342,
+    "comfyui_unloaded": false,
+    "lm_studio_models_idle": {"model-name": 180},
+    "vision_idle_seconds": 500,
+    "vision_unloaded": false
+  }
+}
+```
+
+---
+
 ## Arc A380 Preprocessing
 
 The Intel Arc A380 runs a Qwen2.5-3B-Instruct model that serves three roles:
@@ -452,9 +562,9 @@ User Request → Dart Server
 
 ---
 
-## Image Pipeline
+## Image Search Pipeline
 
-Image requests go through a dedicated pipeline:
+Image *search* requests (as opposed to image *generation*) go through a dedicated pipeline:
 
 1. **Tool routing** detects image keywords → sends ONLY the `image` tool (not `web`)
 2. **MCP image search** queries SearXNG (aggregates Google Images + Bing Images), DDG, and Bing directly
@@ -555,8 +665,10 @@ aichat/
 │   │   └── web/             # app.js, style.css, index.html
 │   ├── auth/                # Auth proxy Dockerfile + server.py
 │   ├── mcp/                 # MCP server (FastAPI, 16 mega-tools)
+│   │   ├── app.py           # Main MCP app (9000+ lines, 102 tools)
+│   │   └── gpu_ttl.py       # GPU idle TTL auto-unload watcher
 │   ├── data/                # Data service
-│   ├── vision/              # Vision service (OCR, face, video)
+│   ├── vision/              # Vision service (OCR, CLIP, YOLOv8n, video, OpenVINO SDXL)
 │   ├── browser/             # Headless Chromium
 │   ├── docs/                # Document processing
 │   ├── sandbox/             # Code execution sandbox
