@@ -14,8 +14,22 @@ concurrency:
   group: dart-ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  repo-guard:
+    name: Repository Context Guard
+    runs-on: [self-hosted, unified-all]
+    timeout-minutes: 2
+    steps:
+      - name: Verify repository ownership
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          if [ "${{ github.repository }}" != "Al-Sarraf-Tech/aichat" ]; then
+            echo "::error::SECURITY VIOLATION: Unauthorised repository."
+            exit 1
+          fi
+          echo "Repository context verified."
   lint:
     name: Dart Lint
+    needs: repo-guard
     runs-on: [self-hosted, unified-all]
     timeout-minutes: 10
     steps:
@@ -36,7 +50,7 @@ jobs:
   test:
     name: Dart Test
     runs-on: [self-hosted, unified-all]
-    needs: lint
+    needs: [repo-guard, lint]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +84,7 @@ jobs:
 
   frontend-check:
     name: Frontend Syntax
-    needs: lint
+    needs: [repo-guard, lint]
     runs-on: [self-hosted, unified-all]
     timeout-minutes: 5
     steps:
