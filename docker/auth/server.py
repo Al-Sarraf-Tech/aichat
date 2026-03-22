@@ -36,7 +36,7 @@ log = logging.getLogger('auth')
 
 # ── Database ────────────────────────────────────────────────────────
 def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=10)
 
 
 def db_retry(fn, retries=30, delay=2):

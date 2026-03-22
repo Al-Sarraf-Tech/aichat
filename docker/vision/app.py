@@ -219,6 +219,30 @@ def _is_remote(url: str) -> bool:
     return url.startswith("http://") or url.startswith("https://")
 
 
+def _validate_local_path(raw: str) -> str:
+    """Validate that a local file path is strictly inside WORKSPACE.
+
+    Prevents path traversal attacks (e.g. ``../../etc/passwd``) by
+    normalizing the path without following symlinks and enforcing
+    containment within the WORKSPACE directory.
+    """
+    p = Path(raw)
+    workspace_resolved = WORKSPACE.resolve()
+    if not p.is_absolute():
+        p = WORKSPACE / p
+    p = Path(os.path.normpath(p))
+    try:
+        p.relative_to(workspace_resolved)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: path outside workspace",
+        )
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {raw}")
+    return str(p)
+
+
 # ===========================================================================
 # Root video routes
 # ===========================================================================
@@ -281,7 +305,7 @@ async def video_info(payload: dict) -> dict:
             tmp_path = await _download_to_tmp(url)
             target = tmp_path
         else:
-            target = url
+            target = _validate_local_path(url)
         probe = _ffprobe(target)
         return {"url": url, **_parse_video_info(probe)}
     except httpx.HTTPStatusError as exc:
@@ -318,7 +342,7 @@ async def extract_frames(payload: dict) -> dict:
             tmp_path = await _download_to_tmp(url)
             target = tmp_path
         else:
-            target = url
+            target = _validate_local_path(url)
         out_pattern = str(out_dir / "frame_%04d.png")
         cmd = ["ffmpeg", *_ffmpeg_hwaccel_args(), "-i", target,
                "-vf", f"fps=1/{interval_sec}", "-frames:v", str(max_frames),
@@ -370,7 +394,7 @@ async def get_thumbnail(payload: dict) -> dict:
             tmp_path = await _download_to_tmp(url)
             target = tmp_path
         else:
-            target = url
+            target = _validate_local_path(url)
         thumb_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
         thumb_tmp.close()
         cmd = ["ffmpeg", "-ss", str(timestamp_sec), *_ffmpeg_hwaccel_args(),
@@ -454,7 +478,7 @@ async def transcode(payload: dict) -> dict:
             tmp_path = await _download_to_tmp(url)
             target = tmp_path
         else:
-            target = url
+            target = _validate_local_path(url)
 
         if use_gpu:
             # Full VA-API pipeline: decode on GPU → optional scale on GPU → encode on GPU

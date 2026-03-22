@@ -72,7 +72,7 @@ VALID_TASK_STATUSES = {"pending", "ready", "in_progress", "done", "failed", "can
 
 @contextmanager
 def _pg() -> Generator[psycopg.Connection, None, None]:
-    con = psycopg.connect(DB_POSTGRES, row_factory=dict_row)
+    con = psycopg.connect(DB_POSTGRES, row_factory=dict_row, connect_timeout=10)
     try:
         yield con
         con.commit()
@@ -419,15 +419,15 @@ def memory_store(req: _StoreReq) -> dict:
         raise HTTPException(status_code=400, detail="key must not be empty")
     expires_at = None
     if req.ttl_seconds and req.ttl_seconds > 0:
-        expires_at = f"NOW() + INTERVAL '{int(req.ttl_seconds)} seconds'"
+        expires_at = max(1, int(req.ttl_seconds))
     with _pg() as pg:
-        if expires_at:
+        if expires_at is not None:
             pg.execute(
-                f"INSERT INTO memory(key, value, ts, expires_at) "
-                f"VALUES(%s, %s, NOW(), {expires_at}) "
+                "INSERT INTO memory(key, value, ts, expires_at) "
+                "VALUES(%s, %s, NOW(), NOW() + make_interval(secs => %s)) "
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, ts=NOW(), "
-                f"expires_at={expires_at}",
-                (key, req.value),
+                "expires_at=NOW() + make_interval(secs => %s)",
+                (key, req.value, expires_at, expires_at),
             )
         else:
             pg.execute(
