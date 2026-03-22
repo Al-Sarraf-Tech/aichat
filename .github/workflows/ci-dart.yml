@@ -70,6 +70,7 @@ jobs:
 
   frontend-check:
     name: Frontend Syntax
+    needs: lint
     runs-on: [self-hosted, unified-all]
     timeout-minutes: 5
     steps:
