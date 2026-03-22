@@ -19,7 +19,7 @@ jobs:
     runs-on: [self-hosted, unified-all]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Dart SDK
         shell: bash
         timeout-minutes: 5
@@ -39,7 +39,7 @@ jobs:
     needs: lint
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Dart SDK
         shell: bash
         timeout-minutes: 5
@@ -73,5 +73,5 @@ jobs:
     runs-on: [self-hosted, unified-all]
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: node -c docker/web/web/app.js
