@@ -1272,6 +1272,7 @@ function stopGeneration() {
     setTimeout(() => {
       if (isStreaming) {
         isStreaming = false;
+        _sendLock = false;
         abortController = null;
         updateActionBtn();
         document.querySelectorAll('.streaming').forEach(el => el.classList.remove('streaming'));

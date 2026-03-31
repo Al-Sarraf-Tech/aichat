@@ -9080,6 +9080,16 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     return _text("\n".join(lines_all))
 
             # ── Team of Experts ─────────────────────────────────────
+            def _sanitize_team_error(err: str) -> str:
+                """Strip internal IPs, paths, hostnames, and SSH details from error messages."""
+                import re as _re
+                err = _re.sub(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?", "[internal]", err)
+                err = _re.sub(r"host\.docker\.internal(:\d+)?", "[host]", err)
+                err = _re.sub(r"/app/\.ssh/\S+", "[key]", err)
+                err = _re.sub(r"/run/secrets/\S+", "[key]", err)
+                err = _re.sub(r"jalsarraf@\S+", "[user@host]", err)
+                return err
+
             if name == "team_chat":
                 from team import team_chat as _team_chat, get_progress_reporter
                 pr = get_progress_reporter()
@@ -9096,7 +9106,9 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 header = f"🧠 **Team of Experts** — Agent: **{result.agent}** ({result.elapsed_s}s)"
                 if result.success:
                     return _text(f"{header}\n\n{result.content}")
-                return _text(f"{header}\n\n❌ Error: {result.error}")
+                # Sanitize error — strip internal IPs, paths, and hostnames
+                safe_err = _sanitize_team_error(result.error)
+                return _text(f"{header}\n\n❌ Error: {safe_err}")
 
             if name == "team_image":
                 from team import image_pipeline, get_progress_reporter, ImageResult
@@ -9136,7 +9148,9 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 return blocks
 
             if name == "team_agents":
-                from team import team_agents as _team_agents
+                from team import team_agents as _team_agents, TEAM_ENABLED as _TE
+                if not _TE:
+                    return _text("🧠 Team of Experts is **disabled** (TEAM_ENABLED=false)")
                 agents = await _team_agents()
                 lines = ["🧠 **Team of Experts — Agent Fleet**\n"]
                 for a in agents:
