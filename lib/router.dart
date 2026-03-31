@@ -345,6 +345,7 @@ class AppRouter {
         effectiveModel,
         userContent,
         controller,
+        imageCount: imageAttachments?.length ?? 0,
       ).catchError((e) {
         _log.severe('Team chat error: $e');
         _sseEvent(controller, 'error', {'message': '$e'});
@@ -427,36 +428,61 @@ class AppRouter {
     String conversationId,
     String teamModel,
     String userContent,
-    StreamController<List<int>> controller,
-  ) async {
+    StreamController<List<int>> controller, {
+    int imageCount = 0,
+  }) async {
     final agent = teamModel.replaceFirst('team:', '');
     _log.info('Team of Experts: routing to agent=$agent');
 
     _sseEvent(controller, 'status',
         {'text': 'Team of Experts routing to ${agent == 'auto' ? 'best agent' : agent}...'});
 
+    // Build context — note dropped images if any
+    String context = '';
+    if (imageCount > 0) {
+      context =
+          'User attached $imageCount image(s) but team_chat does not yet support image input.';
+    }
+
     try {
       final result = await _withKeepalive(controller, () => mcp.callTool('team_chat', {
         'message': userContent,
         'agent': agent,
         'task_type': 'auto',
+        if (context.isNotEmpty) 'context': context,
       }));
+
+      // Check for MCP-level error flag
+      final isError = result['isError'] == true;
 
       final content = result['content'] as List?;
       if (content == null || content.isEmpty) {
         _sseEvent(controller, 'token', {'text': 'No response from Team of Experts.'});
       } else {
-        for (final block in content) {
-          final m = Map<String, dynamic>.from(block as Map);
-          if (m['type'] == 'text') {
-            _sseEvent(controller, 'token', {'text': m['text'] as String? ?? ''});
-          } else if (m['type'] == 'image') {
-            _sseEvent(controller, 'tool_result', {
-              'name': 'team_image',
-              'result': jsonEncode([
-                {'type': 'image_url', 'data': m['data'], 'mime_type': m['mimeType'] ?? 'image/jpeg'},
-              ]),
-            });
+        // Extract full text to check for agent-level errors
+        final fullText = content
+            .whereType<Map>()
+            .where((b) => b['type'] == 'text')
+            .map((b) => b['text'] as String? ?? '')
+            .join('\n');
+        final hasAgentError = RegExp(r'(^|\n\n)❌ Error:').hasMatch(fullText);
+
+        if (isError || hasAgentError) {
+          // Emit as error event so the UI shows error styling
+          _sseEvent(controller, 'error', {'message': fullText});
+        } else {
+          for (final block in content) {
+            final m = Map<String, dynamic>.from(block as Map);
+            if (m['type'] == 'text') {
+              _sseEvent(controller, 'token', {'text': m['text'] as String? ?? ''});
+            } else if (m['type'] == 'image') {
+              _sseEvent(controller, 'tool_result', {
+                'name': 'team_image',
+                'result': jsonEncode([
+                  {'type': 'image_url', 'data': m['data'], 'mime_type': m['mimeType'] ?? 'image/jpeg'},
+                ]),
+              });
+            }
           }
         }
       }
