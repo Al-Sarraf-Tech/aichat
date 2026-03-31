@@ -436,11 +436,11 @@ class AppRouter {
         {'text': 'Team of Experts routing to ${agent == 'auto' ? 'best agent' : agent}...'});
 
     try {
-      final result = await mcp.callTool('team_chat', {
+      final result = await _withKeepalive(controller, () => mcp.callTool('team_chat', {
         'message': userContent,
         'agent': agent,
         'task_type': 'auto',
-      });
+      }));
 
       final content = result['content'] as List?;
       if (content == null || content.isEmpty) {

@@ -949,14 +949,17 @@ function setupDragDrop() {
 }
 
 // ── Send / Stream ──────────────────────────────────────────────────
+let _sendLock = false;
 async function send() {
   const input = document.getElementById('input');
   if (!input) { console.error('send: input element not found'); return; }
   const text = input.value.trim();
-  if ((!text && !pendingFiles.length) || isStreaming) return;
+  if ((!text && !pendingFiles.length) || isStreaming || _sendLock) return;
+  _sendLock = true;
 
   // Require a model to be selected AND loaded before sending
   if (!selectedModel || !selectedModelReady) {
+    _sendLock = false;
     const modelBtn = document.getElementById('model-label');
     if (modelBtn) { modelBtn.style.animation = 'pulse 0.5s ease 2'; setTimeout(() => modelBtn.style.animation = '', 1200); }
     return;
@@ -971,9 +974,9 @@ async function send() {
         convBody.personality_id = selectedPersonality.id;
       }
       const r = await authFetch('/api/conversations', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(convBody) });
-      if (!r.ok) { console.error('Create conv:', r.status); return; }
+      if (!r.ok) { console.error('Create conv:', r.status); _sendLock = false; return; }
       currentConvId = (await r.json()).id;
-    } catch (e) { console.error('Create conv:', e); return; }
+    } catch (e) { console.error('Create conv:', e); _sendLock = false; return; }
   }
 
   const files = [...pendingFiles]; pendingFiles = []; renderAttachments();
@@ -999,7 +1002,7 @@ async function send() {
     scrollToBottom();
   } catch (domErr) {
     console.error('send DOM setup error:', domErr);
-    isStreaming = false; abortController = null; updateActionBtn();
+    isStreaming = false; _sendLock = false; abortController = null; updateActionBtn();
     return;
   }
 
@@ -1034,7 +1037,7 @@ async function send() {
     if (!res.ok) {
       spinner.remove();
       contentEl.innerHTML = `<p style="color:var(--error)">Server error ${res.status}</p>`;
-      aDiv.classList.remove('streaming'); isStreaming=false; abortController=null; updateActionBtn();
+      aDiv.classList.remove('streaming'); isStreaming=false; _sendLock=false; abortController=null; updateActionBtn();
       return;
     }
 
@@ -1258,7 +1261,7 @@ async function send() {
   document.querySelectorAll('.loading-spinner').forEach(el => el.remove());
   postProcess(bodyEl);
   scrollToBottom();
-  isStreaming = false; abortController = null; updateActionBtn();
+  isStreaming = false; _sendLock = false; abortController = null; updateActionBtn();
   await loadConversations();
 }
 
