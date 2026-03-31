@@ -982,7 +982,7 @@ async function send() {
   const files = [...pendingFiles]; pendingFiles = []; renderAttachments();
   input.value = ''; input.style.height = 'auto';
   showView('chat');
-  isStreaming = true; abortController = new AbortController(); updateActionBtn();
+  isStreaming = true; _generationEpoch++; abortController = new AbortController(); updateActionBtn();
 
   let contentEl, bodyEl, aDiv, spinner;
   try {
@@ -1265,12 +1265,14 @@ async function send() {
   await loadConversations();
 }
 
+let _generationEpoch = 0;
 function stopGeneration() {
   if (abortController) {
+    const epoch = _generationEpoch;
     try { abortController.abort(); } catch {}
-    // Force reset state in case abort doesn't trigger catch
+    // Force reset state — scoped to this generation epoch so a new send() is not affected
     setTimeout(() => {
-      if (isStreaming) {
+      if (isStreaming && _generationEpoch === epoch) {
         isStreaming = false;
         _sendLock = false;
         abortController = null;

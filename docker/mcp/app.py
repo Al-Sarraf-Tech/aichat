@@ -3734,6 +3734,18 @@ def _resolve_mega_tool(name: str, args: dict[str, Any]) -> tuple[str, dict[str, 
     return original_name, args
 
 
+def _sanitize_error(err: str) -> str:
+    """Strip internal IPs, paths, hostnames, container names, and SSH details from error messages."""
+    err = re.sub(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?", "[internal]", err)
+    err = re.sub(r"host\.docker\.internal(:\d+)?", "[host]", err)
+    err = re.sub(r"aichat-\w+:\d+", "[service]", err)  # Docker service:port
+    err = re.sub(r"/app/\.ssh/\S+", "[key]", err)
+    err = re.sub(r"/run/secrets/\S+", "[key]", err)
+    err = re.sub(r"/workspace/\S+", "[workspace]", err)
+    err = re.sub(r"jalsarraf@\S+", "[user@host]", err)
+    return err
+
+
 async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Dispatch a tool call and return a list of MCP content blocks."""
     # Resolve mega-tool calls to original handler names
@@ -9120,16 +9132,6 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     return _text("\n".join(lines_all))
 
             # ── Team of Experts ─────────────────────────────────────
-            def _sanitize_team_error(err: str) -> str:
-                """Strip internal IPs, paths, hostnames, and SSH details from error messages."""
-                import re as _re
-                err = _re.sub(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?", "[internal]", err)
-                err = _re.sub(r"host\.docker\.internal(:\d+)?", "[host]", err)
-                err = _re.sub(r"/app/\.ssh/\S+", "[key]", err)
-                err = _re.sub(r"/run/secrets/\S+", "[key]", err)
-                err = _re.sub(r"jalsarraf@\S+", "[user@host]", err)
-                return err
-
             if name == "team_chat":
                 from team import team_chat as _team_chat, get_progress_reporter
                 pr = get_progress_reporter()
@@ -9147,7 +9149,7 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 if result.success:
                     return _text(f"{header}\n\n{result.content}")
                 # Sanitize error — strip internal IPs, paths, and hostnames
-                safe_err = _sanitize_team_error(result.error)
+                safe_err = _sanitize_error(result.error)
                 return _text(f"{header}\n\n❌ Error: {safe_err}")
 
             if name == "team_image":
@@ -9272,6 +9274,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     if not rel_path:
                         return _text("workspace: 'path' is required for write")
                     content = str(args.get("content", ""))
+                    if len(content) > 10 * 1024 * 1024:  # 10 MB write limit
+                        return _text("workspace: content too large (>10MB)")
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(content)
                     return _text(f"✅ Written {len(content)} bytes to {user}/{rel_path}")
@@ -9314,7 +9318,8 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
             return _text(f"Unknown tool: {name}")
 
         except Exception as exc:
-            return _text(f"Error calling {name}: {exc}")
+            safe = _sanitize_error(str(exc))
+            return _text(f"Error calling {name}: {safe}")
 
 
 # ---------------------------------------------------------------------------

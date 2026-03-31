@@ -1,0 +1,5 @@
+# Ignore all user workspace data — only track .gitkeep and README
+*
+!.gitkeep
+!.gitignore
+!README.md
