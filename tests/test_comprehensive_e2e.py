@@ -93,7 +93,7 @@ class TestToolInventory:
         )
         tools = r.json().get("result", {}).get("tools", [])
         names = {t["name"] for t in tools}
-        assert len(names) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(names)}"
+        assert len(names) == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {len(names)}"
         # Spot-check mega-tool names (old individual names are now actions)
         for t in ("browser", "web", "image", "code", "planner", "vector", "media"):
             assert t in names, f"Missing mega-tool: {t}"

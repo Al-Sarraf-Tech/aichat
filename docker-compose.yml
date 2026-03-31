@@ -256,6 +256,8 @@ services:
       - /home/jalsarraf/aipictures:/app/pictures
       # SSH key for Team of Experts CLI agent invocation (Claude, Codex)
       - /home/jalsarraf/.ssh/automation:/run/secrets/team_ssh_key:ro
+      # Per-user workspace — scripts, images, documents
+      - ./workspace:/workspace
     depends_on:
       aichat-data:
         condition: service_healthy

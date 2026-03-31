@@ -58,9 +58,10 @@ _EXPECTED_MEGA_TOOLS = {
     "memory", "knowledge", "vector", "code", "custom_tools",
     "planner", "jobs", "research", "think", "system",
     "team_chat", "team_image", "team_agents", "team_status",
+    "workspace",
 }
 
-# Team tools use their own schema (not the mega-tool action pattern)
+# Non-mega tools — use their own schema (not the mega-tool action pattern)
 _TEAM_TOOLS = {"team_chat", "team_image", "team_agents", "team_status"}
 
 # Expected actions per mega-tool (minimum set that must exist)
@@ -98,9 +99,9 @@ _CRITICAL_HANDLERS = {
 @skip_load
 class TestToolCount:
     def test_exactly_20_tools(self):
-        """Platform must expose exactly 20 tools (16 mega + 4 team)."""
+        """Platform must expose exactly 21 tools (16 mega + 4 team)."""
         count = len(_TOOLS)
-        assert count == 20, f"Expected 20 tools (16 mega + 4 team), got {count}."
+        assert count == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {count}."
 
     def test_no_duplicate_names(self):
         """Every tool name must be unique."""

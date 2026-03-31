@@ -108,7 +108,7 @@ class TestSchemaValidation:
 
     def test_exactly_20_tools(self, app_source: str):
         names = _extract_tools_names(app_source)
-        assert len(names) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(names)}: {names}"
+        assert len(names) == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {len(names)}: {names}"
 
     def test_expected_tool_names(self, app_source: str):
         names = set(_extract_tools_names(app_source))
@@ -117,6 +117,7 @@ class TestSchemaValidation:
             "memory", "knowledge", "vector", "code", "custom_tools",
             "planner", "jobs", "research", "think", "system",
             "team_chat", "team_image", "team_agents", "team_status",
+            "workspace",
         }
         assert names == expected, f"Missing: {expected - names}, Extra: {names - expected}"
 
@@ -459,13 +460,13 @@ class TestMCPIntegration:
         )
         data = r.json()
         tools = data.get("result", {}).get("tools", [])
-        assert len(tools) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(tools)}"
+        assert len(tools) == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {len(tools)}"
 
     def test_health_reports_tool_count(self):
         import httpx
         r = httpx.get(f"{_MCP_URL}/health", timeout=5)
         data = r.json()
-        assert data.get("tools") == 20
+        assert data.get("tools") == 21
 
     def test_think_tool_works(self):
         """think tool should work without action param."""

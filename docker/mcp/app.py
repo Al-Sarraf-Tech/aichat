@@ -1858,6 +1858,46 @@ _TOOLS: list[dict[str, Any]] = [
         "description": "Check status of Team of Experts system — agent availability and health.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    # ==================================================================
+    # Workspace — per-user file storage
+    # ==================================================================
+    {
+        "name": "workspace",
+        "description": (
+            "Per-user file storage for scripts, images, documents, and other assets.\n"
+            "Each user gets an isolated folder — users cannot access each other's files.\n"
+            "Actions:\n"
+            "  list   — List files/dirs in a user's workspace (or subdirectory).\n"
+            "  read   — Read a file from the workspace.\n"
+            "  write  — Create or overwrite a file.\n"
+            "  delete — Delete a file.\n"
+            "  mkdir  — Create a subdirectory.\n"
+            "  info   — Show workspace usage stats (file count, total size)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "write", "delete", "mkdir", "info"],
+                    "description": "Workspace action to perform.",
+                },
+                "user": {
+                    "type": "string",
+                    "description": "Username (workspace owner). Defaults to 'default'.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Relative path within the user's workspace (e.g. 'scripts/deploy.sh').",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "File content for write action.",
+                },
+            },
+            "required": ["action"],
+        },
+    },
 ]
 
 
@@ -9170,6 +9210,106 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     f"  Agents: {avail}/{len(agents)} available\n"
                     f"  Fleet: {', '.join(a['name'] for a in agents if a['available'])}"
                 )
+
+            # ── Workspace — per-user file storage ──────────────────────
+            if name == "workspace":
+                import pathlib
+                _WS_ROOT = pathlib.Path("/workspace")
+                action = str(args.get("action", "")).strip()
+                user = str(args.get("user", "default")).strip()
+                rel_path = str(args.get("path", "")).strip()
+
+                # Sanitize username — alphanumeric, hyphens, underscores only
+                if not re.match(r'^[a-zA-Z0-9_-]{1,64}$', user):
+                    return _text("workspace: invalid username")
+
+                user_root = _WS_ROOT / user
+                user_root.mkdir(parents=True, exist_ok=True)
+
+                # Resolve and verify path stays within user's folder
+                if rel_path:
+                    if '\x00' in rel_path or rel_path.startswith('/'):
+                        return _text("workspace: invalid path")
+                    target = (user_root / rel_path).resolve()
+                else:
+                    target = user_root.resolve()
+                if not str(target).startswith(str(user_root.resolve())):
+                    return _text("workspace: path traversal blocked")
+
+                if action == "list":
+                    if not target.exists():
+                        return _text(f"workspace: path not found: {rel_path or '/'}")
+                    if target.is_file():
+                        st = target.stat()
+                        return _text(f"📄 {target.name} ({st.st_size} bytes)")
+                    entries = sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name))
+                    lines = [f"📁 **{user}** workspace — {rel_path or '/'}\n"]
+                    for e in entries:
+                        if e.is_dir():
+                            lines.append(f"  📁 {e.name}/")
+                        else:
+                            lines.append(f"  📄 {e.name} ({e.stat().st_size:,} bytes)")
+                    if len(entries) == 0:
+                        lines.append("  (empty)")
+                    return _text("\n".join(lines))
+
+                elif action == "read":
+                    if not rel_path:
+                        return _text("workspace: 'path' is required for read")
+                    if not target.exists():
+                        return _text(f"workspace: file not found: {rel_path}")
+                    if not target.is_file():
+                        return _text(f"workspace: not a file: {rel_path}")
+                    if target.stat().st_size > 5 * 1024 * 1024:
+                        return _text("workspace: file too large (>5MB)")
+                    try:
+                        content = target.read_text(errors="replace")
+                    except Exception:
+                        content = "(binary file — cannot display as text)"
+                    return _text(f"📄 **{rel_path}**\n```\n{content}\n```")
+
+                elif action == "write":
+                    if not rel_path:
+                        return _text("workspace: 'path' is required for write")
+                    content = str(args.get("content", ""))
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content)
+                    return _text(f"✅ Written {len(content)} bytes to {user}/{rel_path}")
+
+                elif action == "delete":
+                    if not rel_path:
+                        return _text("workspace: 'path' is required for delete")
+                    if not target.exists():
+                        return _text(f"workspace: not found: {rel_path}")
+                    if target.is_dir():
+                        import shutil
+                        shutil.rmtree(target)
+                        return _text(f"🗑️ Deleted directory {user}/{rel_path}")
+                    target.unlink()
+                    return _text(f"🗑️ Deleted {user}/{rel_path}")
+
+                elif action == "mkdir":
+                    if not rel_path:
+                        return _text("workspace: 'path' is required for mkdir")
+                    target.mkdir(parents=True, exist_ok=True)
+                    return _text(f"📁 Created {user}/{rel_path}/")
+
+                elif action == "info":
+                    if not user_root.exists():
+                        return _text(f"📁 **{user}** workspace: empty (0 files, 0 bytes)")
+                    total_files = 0
+                    total_bytes = 0
+                    for f in user_root.rglob("*"):
+                        if f.is_file():
+                            total_files += 1
+                            total_bytes += f.stat().st_size
+                    return _text(
+                        f"📁 **{user}** workspace\n"
+                        f"  Files: {total_files}\n"
+                        f"  Size: {total_bytes:,} bytes ({total_bytes / 1024 / 1024:.1f} MB)"
+                    )
+                else:
+                    return _text(f"workspace: unknown action '{action}'")
 
             return _text(f"Unknown tool: {name}")
 

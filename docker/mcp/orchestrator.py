@@ -30,6 +30,7 @@ class TaskIntent(str, Enum):
     CODE_SYSTEM    = "code_system"          # code_run, jupyter, shell
     MEMORY         = "memory"               # store, recall, compact
     TEAM           = "team"                 # team_chat, team_image, team_agents
+    WORKSPACE      = "workspace"            # workspace file operations
     MIXED          = "mixed"                # orchestrate, plan_task
 
 
@@ -114,6 +115,8 @@ _INTENT_MAP: dict[str, TaskIntent] = {
     "team_image": TaskIntent.TEAM,
     "team_status": TaskIntent.TEAM,
     "team_agents": TaskIntent.TEAM,
+    # Workspace
+    "workspace": TaskIntent.WORKSPACE,
 }
 
 
@@ -129,6 +132,7 @@ _CONCURRENCY_LIMITS: dict[TaskIntent, int] = {
     TaskIntent.CODE_SYSTEM: 1,  # isolation
     TaskIntent.MEMORY: 8,  # lightweight DB ops
     TaskIntent.TEAM: 2,  # team workflows can be long-running
+    TaskIntent.WORKSPACE: 4,  # lightweight file I/O
     TaskIntent.MIXED: 2,
 }
 
