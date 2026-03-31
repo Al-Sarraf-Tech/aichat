@@ -70,6 +70,25 @@ COMFYUI_URL = os.environ.get("COMFYUI_URL", "")
 # ---------------------------------------------------------------------------
 
 _MAX_OUTPUT = 5 * 1024 * 1024  # 5 MB cap on subprocess output
+_MAX_INPUT = 100 * 1024  # 100 KB cap on input message
+_MAX_CONTEXT = 50 * 1024  # 50 KB cap on context
+
+# Constraining system prompt for CLI agents — prevents prompt injection
+# from causing the agent to access credentials, delete files, or modify system config.
+_AGENT_SYSTEM_PROMPT = (
+    "You are a helpful coding assistant invoked through the aichat Team of Experts. "
+    "Answer the user's question accurately and concisely. "
+    "NEVER read, output, or modify SSH keys, .env files, credentials, tokens, or secrets. "
+    "NEVER execute rm -rf, chmod, chown on system directories, or any command that "
+    "modifies system configuration, firewall rules, or network settings. "
+    "NEVER access /etc, /root, ~/.ssh, ~/.config, or similar sensitive paths. "
+    "If asked to do something destructive or access credentials, refuse and explain why."
+)
+
+# Valid values for hardcoded parameters (prevent latent injection)
+_VALID_MODELS_CLAUDE = {"haiku", "sonnet", "opus"}
+_VALID_EFFORTS = {"low", "medium", "high", "max"}
+_VALID_REASONING = {"low", "medium", "high", "xhigh"}
 
 
 @dataclass
@@ -259,21 +278,26 @@ async def _run_ssh_cli(agent_name: str, command: str, *, timeout_s: float = 300.
 async def run_claude(prompt: str, *, system: str = "", model: str = "sonnet",
                      effort: str = "high") -> AgentResult:
     """Run Claude Code CLI on the host via SSH."""
-    escaped_prompt = prompt.replace("'", "'\"'\"'")
-    escaped_system = system.replace("'", "'\"'\"'") if system else ""
+    # Validate parameters against whitelists
+    model = model if model in _VALID_MODELS_CLAUDE else "sonnet"
+    effort = effort if effort in _VALID_EFFORTS else "high"
+    # Enforce system prompt for safety
+    full_system = f"{_AGENT_SYSTEM_PROMPT}\n\n{system}" if system else _AGENT_SYSTEM_PROMPT
+    escaped_prompt = prompt[:_MAX_INPUT].replace("'", "'\"'\"'")
+    escaped_system = full_system.replace("'", "'\"'\"'")
     cmd_parts = [
         "claude", "--model", model, "--effort", effort,
         "--output-format", "text", "--dangerously-skip-permissions",
+        "--append-system-prompt", f"'{escaped_system}'",
     ]
-    if escaped_system:
-        cmd_parts += ["--append-system-prompt", f"'{escaped_system}'"]
     cmd_parts += ["-p", f"'{escaped_prompt}'"]
     return await _run_ssh_cli("claude", " ".join(cmd_parts), timeout_s=600.0)
 
 
 async def run_codex(prompt: str, *, reasoning: str = "medium") -> AgentResult:
     """Run Codex CLI on the host via SSH."""
-    escaped = prompt.replace("'", "'\"'\"'")
+    reasoning = reasoning if reasoning in _VALID_REASONING else "medium"
+    escaped = prompt[:_MAX_INPUT].replace("'", "'\"'\"'")
     cmd = (
         f"codex exec -m gpt-5.4 -c reasoning_effort={reasoning} "
         f"--full-auto --skip-git-repo-check '{escaped}'"
@@ -1017,6 +1041,11 @@ async def team_chat(message: str, *, task_type: str = "auto",
     if not TEAM_ENABLED:
         return AgentResult(agent="team", exit_code=1,
                            error="Team of Experts is disabled (TEAM_ENABLED=false)")
+    # Input length limits — prevent DoS via massive messages
+    if len(message) > _MAX_INPUT:
+        message = message[:_MAX_INPUT]
+    if len(context) > _MAX_CONTEXT:
+        context = context[:_MAX_CONTEXT]
     if task_type == "auto":
         task_type = _classify_task(message)
     chosen = TeamRouter.pick(task_type, force_agent=agent if agent != "auto" else None)
