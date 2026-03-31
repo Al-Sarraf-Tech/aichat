@@ -215,7 +215,7 @@ class McpClient {
             headers: {'Content-Type': 'application/json'},
             body: body,
           )
-          .timeout(const Duration(seconds: 120));
+          .timeout(const Duration(seconds: 600));
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final result = data['result'] as Map<String, dynamic>?;
       if (result != null) return result;

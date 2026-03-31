@@ -408,7 +408,7 @@ class TestPlannerSchema:
         assert "title" in props
 
     def test_tool_count_increased(self):
-        assert len(_TOOLS) == 16, f"Expected 16 mega-tools, got {len(_TOOLS)}"
+        assert len(_TOOLS) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(_TOOLS)}"
 
 
 # ===========================================================================

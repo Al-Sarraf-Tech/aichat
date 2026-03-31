@@ -10,8 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libdrm2 libva2 intel-media-va-driver \
         vainfo clinfo \
         nodejs npm \
+        openssh-client \
+        gosu \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r mcp && useradd -r -g mcp -d /app -s /sbin/nologin mcp
+    && groupadd -r mcp && useradd -r -g mcp -d /app -s /sbin/nologin mcp \
+    && mkdir -p /app/.ssh && chown mcp:mcp /app/.ssh && chmod 700 /app/.ssh
 
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
@@ -29,9 +32,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 RUN chown -R mcp:mcp /app
 
-USER mcp
+RUN chmod +x /app/entrypoint.sh
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8096/health', timeout=3)"
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8096"]

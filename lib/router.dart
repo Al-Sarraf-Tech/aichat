@@ -336,6 +336,31 @@ class AppRouter {
       }
     }
 
+    // ── Team of Experts routing ────────────────────────────────────
+    // team:* models bypass LM Studio entirely and route through MCP.
+    if (effectiveModel.startsWith('team:')) {
+      final controller = StreamController<List<int>>();
+      _runTeamChat(
+        id,
+        effectiveModel,
+        userContent,
+        controller,
+      ).catchError((e) {
+        _log.severe('Team chat error: $e');
+        _sseEvent(controller, 'error', {'message': '$e'});
+        if (!controller.isClosed) controller.close();
+      });
+      return Response.ok(
+        controller.stream,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          ..._corsHeaders,
+        },
+      );
+    }
+
     // Capacity guard: if the model is not loaded and slots are full, reject
     final busyMsg = await llm.ensureModelOrBusy(
       effectiveModel,
@@ -395,6 +420,62 @@ class AppRouter {
         ..._corsHeaders,
       },
     );
+  }
+
+  /// Route a message through Team of Experts via MCP, bypassing LM Studio.
+  Future<void> _runTeamChat(
+    String conversationId,
+    String teamModel,
+    String userContent,
+    StreamController<List<int>> controller,
+  ) async {
+    final agent = teamModel.replaceFirst('team:', '');
+    _log.info('Team of Experts: routing to agent=$agent');
+
+    _sseEvent(controller, 'status',
+        {'text': 'Team of Experts routing to ${agent == 'auto' ? 'best agent' : agent}...'});
+
+    try {
+      final result = await mcp.callTool('team_chat', {
+        'message': userContent,
+        'agent': agent,
+        'task_type': 'auto',
+      });
+
+      final content = result['content'] as List?;
+      if (content == null || content.isEmpty) {
+        _sseEvent(controller, 'token', {'text': 'No response from Team of Experts.'});
+      } else {
+        for (final block in content) {
+          final m = Map<String, dynamic>.from(block as Map);
+          if (m['type'] == 'text') {
+            _sseEvent(controller, 'token', {'text': m['text'] as String? ?? ''});
+          } else if (m['type'] == 'image') {
+            _sseEvent(controller, 'tool_result', {
+              'name': 'team_image',
+              'result': jsonEncode([
+                {'type': 'image_url', 'data': m['data'], 'mime_type': m['mimeType'] ?? 'image/jpeg'},
+              ]),
+            });
+          }
+        }
+      }
+
+      // Store assistant response in DB
+      final textContent = McpClient.extractText(result);
+      db.addMessage(
+        conversationId: conversationId,
+        role: 'assistant',
+        content: textContent,
+      );
+      db.updateTokenCount(conversationId);
+
+      _sseEvent(controller, 'done', {});
+    } catch (e) {
+      _sseEvent(controller, 'error', {'message': 'Team of Experts error: $e'});
+    } finally {
+      if (!controller.isClosed) controller.close();
+    }
   }
 
   Future<void> _runChatLoop(

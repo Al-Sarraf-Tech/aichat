@@ -106,9 +106,9 @@ def _extract_action_enums(source: str) -> dict[str, list[str]]:
 class TestSchemaValidation:
     """Verify all 16 mega-tool schemas have correct structure."""
 
-    def test_exactly_16_tools(self, app_source: str):
+    def test_exactly_20_tools(self, app_source: str):
         names = _extract_tools_names(app_source)
-        assert len(names) == 16, f"Expected 16 mega-tools, got {len(names)}: {names}"
+        assert len(names) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(names)}: {names}"
 
     def test_expected_tool_names(self, app_source: str):
         names = set(_extract_tools_names(app_source))
@@ -116,6 +116,7 @@ class TestSchemaValidation:
             "web", "browser", "image", "document", "media", "data",
             "memory", "knowledge", "vector", "code", "custom_tools",
             "planner", "jobs", "research", "think", "system",
+            "team_chat", "team_image", "team_agents", "team_status",
         }
         assert names == expected, f"Missing: {expected - names}, Extra: {names - expected}"
 
@@ -132,14 +133,15 @@ class TestSchemaValidation:
         for name in names:
             assert f'"inputSchema"' in text, f"Tool {name} missing inputSchema"
 
-    def test_action_param_required_except_think(self, app_source: str):
-        """All tools except 'think' must have 'action' in required params."""
+    def test_action_param_required_except_think_and_team(self, app_source: str):
+        """All mega-tools except 'think' and team_* must have 'action' in required params."""
+        _team_tools = {"team_chat", "team_image", "team_agents", "team_status"}
         enums = _extract_action_enums(app_source)
-        # think should NOT have action
+        # think and team tools should NOT have action
         assert "think" not in enums, "think should not have an action enum"
         # All others should have action
         for name in _extract_tools_names(app_source):
-            if name == "think":
+            if name == "think" or name in _team_tools:
                 continue
             assert name in enums, f"Tool '{name}' missing action enum"
             assert len(enums[name]) >= 2, f"Tool '{name}' has too few actions: {enums[name]}"
@@ -170,10 +172,11 @@ class TestDispatchRouting:
         assert mtm, "_MEGA_TOOL_MAP not found or empty"
 
     def test_map_covers_all_megatools(self, app_source: str):
+        _team_tools = {"team_chat", "team_image", "team_agents", "team_status"}
         mtm = _extract_mega_tool_map(app_source)
         tool_names = set(_extract_tools_names(app_source))
-        # think has no action, so it shouldn't be in the map
-        expected_in_map = tool_names - {"think"}
+        # think has no action; team_* tools are dispatched separately (not via _MEGA_TOOL_MAP)
+        expected_in_map = tool_names - {"think"} - _team_tools
         mapped = set(mtm.keys())
         missing = expected_in_map - mapped
         assert not missing, f"Tools missing from _MEGA_TOOL_MAP: {missing}"
@@ -442,7 +445,7 @@ def _mcp_available() -> bool:
 class TestMCPIntegration:
     """Live tests against running MCP server."""
 
-    def test_tools_list_returns_16(self):
+    def test_tools_list_returns_20(self):
         import httpx
         r = httpx.post(
             f"{_MCP_URL}/mcp",
@@ -456,13 +459,13 @@ class TestMCPIntegration:
         )
         data = r.json()
         tools = data.get("result", {}).get("tools", [])
-        assert len(tools) == 16, f"Expected 16 tools, got {len(tools)}"
+        assert len(tools) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(tools)}"
 
     def test_health_reports_tool_count(self):
         import httpx
         r = httpx.get(f"{_MCP_URL}/health", timeout=5)
         data = r.json()
-        assert data.get("tools") == 16
+        assert data.get("tools") == 20
 
     def test_think_tool_works(self):
         """think tool should work without action param."""

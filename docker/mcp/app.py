@@ -1772,6 +1772,92 @@ _TOOLS: list[dict[str, Any]] = [
             "required": ["action"],
         },
     },
+    # ==================================================================
+    # Team of Experts — multi-agent orchestration
+    # ==================================================================
+    {
+        "name": "team_chat",
+        "description": (
+            "Send a message to the Team of Experts — a multi-agent system with Claude (sonnet), "
+            "Codex (gpt-5.4), Gemini, Qwen (RTX 3090), and more. The router picks the best agent "
+            "for your task (preferring free local agents first), or you can force a specific agent.\n"
+            "Task types: simple_qa, summarization, creative, research, code_review, architecture, "
+            "security, debugging, testing, documentation, formatting, validation.\n"
+            "Agents: auto (router picks), claude, codex, gemini, qwen."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The task, question, or message to send."},
+                "task_type": {
+                    "type": "string",
+                    "enum": ["auto", "simple_qa", "summarization", "creative", "research",
+                             "code_review", "architecture", "security", "debugging",
+                             "testing", "documentation", "formatting", "validation"],
+                    "description": "Task type for routing. Default: auto (classified from message).",
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": ["auto", "claude", "codex", "gemini", "qwen"],
+                    "description": "Force a specific agent. Default: auto (router picks best).",
+                },
+                "context": {"type": "string", "description": "Optional additional context."},
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "team_image",
+        "description": (
+            "Multi-agent image creation pipeline with the Team of Experts.\n"
+            "Pipeline: Qwen (prompt engineering) → Arc A380 (quick draft) → Gemini/Claude "
+            "(vision review) → ComfyUI/Gemini/OpenAI (final render).\n"
+            "Modes:\n"
+            "  draft   — Arc only, 512x512, ~1s (FREE)\n"
+            "  fast    — Qwen prompt → ComfyUI schnell, 1024x1024, ~5s (FREE)\n"
+            "  quality — Full pipeline, CLIP-scored best result, ~30-45s (FREE*)\n"
+            "  ultra   — Full pipeline, CLIP-scored best result, ~60-90s (FREE*)\n"
+            "  compare — All backends in parallel → multiple results\n"
+            "Backends: auto, comfyui (FLUX.1-dev), gemini, openai, all."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What to generate."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["draft", "fast", "quality", "ultra", "compare"],
+                    "description": "Quality/speed mode. Default: quality.",
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": ["auto", "comfyui", "gemini", "openai", "arc", "all"],
+                    "description": "Image generation backend. Default: auto.",
+                },
+                "style": {"type": "string", "description": "Style hint (photorealistic, anime, oil_painting, digital_art, etc.)."},
+                "aspect_ratio": {
+                    "type": "string",
+                    "enum": ["1:1", "16:9", "9:16", "4:3", "3:2", "3:4", "2:3"],
+                    "description": "Aspect ratio. Default: 1:1.",
+                },
+                "count": {"type": "integer", "description": "Number of variations (1-4). Default: 1."},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "team_agents",
+        "description": (
+            "List all Team of Experts agents with their availability, capabilities, and cost tier. "
+            "Shows which agents are currently reachable (Claude, Codex, Gemini, Qwen, Arc, ComfyUI)."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "team_status",
+        "description": "Check status of Team of Experts system — agent availability and health.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -8992,6 +9078,84 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                         lines_all.append(f"  {cat_name} ({len(cat_tools)} tools)")
                     lines_all.append("\nCall with category='<name>' to list tools in that category.")
                     return _text("\n".join(lines_all))
+
+            # ── Team of Experts ─────────────────────────────────────
+            if name == "team_chat":
+                from team import team_chat as _team_chat, get_progress_reporter
+                pr = get_progress_reporter()
+                # Wire progress to MCP SSE if not already done
+                msg_text = str(args.get("message", "")).strip()
+                if not msg_text:
+                    return _text("team_chat: 'message' is required")
+                result = await _team_chat(
+                    msg_text,
+                    task_type=str(args.get("task_type", "auto")),
+                    agent=str(args.get("agent", "auto")),
+                    context=str(args.get("context", "")),
+                )
+                header = f"🧠 **Team of Experts** — Agent: **{result.agent}** ({result.elapsed_s}s)"
+                if result.success:
+                    return _text(f"{header}\n\n{result.content}")
+                return _text(f"{header}\n\n❌ Error: {result.error}")
+
+            if name == "team_image":
+                from team import image_pipeline, get_progress_reporter, ImageResult
+                prompt_img = str(args.get("prompt", "")).strip()
+                if not prompt_img:
+                    return _text("team_image: 'prompt' is required")
+                results = await image_pipeline(
+                    prompt_img,
+                    mode=str(args.get("mode", "quality")),
+                    backend=str(args.get("backend", "auto")),
+                    style=str(args.get("style", "")),
+                    aspect_ratio=str(args.get("aspect_ratio", "1:1")),
+                    count=min(max(int(args.get("count", 1) or 1), 1), 4),
+                )
+                blocks: list[dict[str, Any]] = []
+                for img in results:
+                    if img.success and img.image_b64:
+                        blocks.append({
+                            "type": "image",
+                            "data": img.image_b64,
+                            "mimeType": "image/jpeg",
+                        })
+                        meta_parts = [f"Backend: {img.backend}",
+                                      f"Size: {img.width}x{img.height}",
+                                      f"Time: {img.elapsed_s}s"]
+                        if img.metadata:
+                            meta_parts += [f"{k}: {v}" for k, v in img.metadata.items()]
+                        blocks.append({"type": "text", "text": " | ".join(meta_parts)})
+                    elif img.error:
+                        blocks.append({"type": "text",
+                                       "text": f"❌ {img.backend}: {img.error}"})
+                if not blocks:
+                    return _text("team_image: no images generated — check agent availability with team_agents")
+                # Prepend header
+                blocks.insert(0, {"type": "text",
+                                  "text": f"🧠 **Team of Experts — Image Pipeline** ({len(results)} result(s))"})
+                return blocks
+
+            if name == "team_agents":
+                from team import team_agents as _team_agents
+                agents = await _team_agents()
+                lines = ["🧠 **Team of Experts — Agent Fleet**\n"]
+                for a in agents:
+                    status = "✅" if a["available"] else "❌"
+                    lines.append(f"  {status} **{a['name']}** ({a['cost']}) — {', '.join(a['capabilities'][:5])}...")
+                return _text("\n".join(lines))
+
+            if name == "team_status":
+                from team import team_agents as _team_agents_st, TEAM_ENABLED
+                if not TEAM_ENABLED:
+                    return _text("🧠 Team of Experts is **disabled** (TEAM_ENABLED=false)")
+                agents = await _team_agents_st()
+                avail = sum(1 for a in agents if a["available"])
+                return _text(
+                    f"🧠 **Team of Experts — Status**\n"
+                    f"  Enabled: ✅\n"
+                    f"  Agents: {avail}/{len(agents)} available\n"
+                    f"  Fleet: {', '.join(a['name'] for a in agents if a['available'])}"
+                )
 
             return _text(f"Unknown tool: {name}")
 

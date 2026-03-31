@@ -292,8 +292,14 @@ function updateModelDisplay() {
   const label = document.getElementById('model-label');
   const badge = document.getElementById('model-badge');
   const caps = document.getElementById('model-caps');
-  label.textContent = selectedModel || 'Select a model';
-  badge.textContent = selectedModel || '';
+  if (isTeamModel(selectedModel)) {
+    const teamAgent = _TEAM_AGENTS.find(t => t.id === selectedModel);
+    label.innerHTML = `${teamAgent?.icon || '\uD83E\uDDE0'} ${teamAgent?.name || selectedModel}<span class="model-team-badge">Team</span>`;
+    badge.textContent = teamAgent?.name || selectedModel;
+  } else {
+    label.textContent = selectedModel || 'Select a model';
+    badge.textContent = selectedModel || '';
+  }
   if (caps) caps.innerHTML = capsHTML(selectedModel);
 
   // Always update tools toggle when model changes
@@ -312,11 +318,73 @@ function toggleModelMenu() {
   else menu.classList.add('hidden');
 }
 
+// ── Team of Experts definitions ───────────────────────────────────
+const _TEAM_AGENTS = [
+  { id: 'team:auto',   name: 'Team of Experts (Auto)',   icon: '\uD83E\uDDE0', desc: 'Smart routing — picks the best agent for each task', cost: 'free-first', caps: 'chat, image, code, research' },
+  { id: 'team:claude',  name: 'Claude (Sonnet)',          icon: '\uD83D\uDFE3', desc: 'Complex reasoning, architecture, security, vision review', cost: 'paid', caps: 'chat, vision' },
+  { id: 'team:codex',   name: 'Codex (GPT-5.4)',         icon: '\uD83D\uDFE2', desc: 'Code review, testing, image generation', cost: 'paid', caps: 'chat, image, code' },
+  { id: 'team:gemini',  name: 'Gemini (2.5 Flash)',      icon: '\uD83D\uDD35', desc: 'Creative, research, vision, image generation', cost: 'free', caps: 'chat, image, vision' },
+  { id: 'team:qwen',    name: 'Qwen 3.5 (RTX 3090)',    icon: '\uD83D\uDFE0', desc: 'QA, summarization, prompt engineering — local RTX 3090', cost: 'free', caps: 'chat' },
+];
+
+function isTeamModel(id) { return id && id.startsWith('team:'); }
+
 function renderModelMenu() {
   const menu = document.getElementById('model-menu');
   menu.innerHTML = '';
+
+  // ── Team of Experts section ────────────────────────────────────
+  const teamHeader = document.createElement('div');
+  teamHeader.className = 'dropdown-section-header team-header';
+  teamHeader.innerHTML = '\uD83E\uDDE0 <strong>Team of Experts</strong> <span style="font-weight:400;font-size:10px;opacity:0.7">— multi-agent AI</span>';
+  menu.appendChild(teamHeader);
+
+  for (const t of _TEAM_AGENTS) {
+    const btn = document.createElement('button');
+    btn.className = 'dropdown-item team-item' + (t.id === selectedModel ? ' active' : '');
+
+    const row = document.createElement('div');
+    row.className = 'model-row';
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'team-icon';
+    iconSpan.textContent = t.icon;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'model-id';
+    nameSpan.textContent = t.name;
+
+    const costSpan = document.createElement('span');
+    costSpan.className = 'meta-tag team-cost-' + (t.cost === 'free' ? 'free' : t.cost === 'paid' ? 'paid' : 'mixed');
+    costSpan.textContent = t.cost.toUpperCase();
+
+    const checkSpan = document.createElement('span');
+    checkSpan.className = 'check';
+    checkSpan.textContent = t.id === selectedModel ? '\u2713' : '';
+
+    row.appendChild(iconSpan);
+    row.appendChild(nameSpan);
+    row.appendChild(costSpan);
+    row.appendChild(checkSpan);
+    btn.appendChild(row);
+
+    const metaRow = document.createElement('div');
+    metaRow.className = 'model-meta';
+    metaRow.innerHTML = '<span class="meta-tag">' + esc(t.desc) + '</span>';
+    btn.appendChild(metaRow);
+
+    btn.onclick = (e) => { e.stopPropagation(); pickModel(t.id); menu.classList.add('hidden'); };
+    menu.appendChild(btn);
+  }
+
+  // ── Divider ────────────────────────────────────────────────────
+  const divider = document.createElement('div');
+  divider.className = 'dropdown-section-header';
+  divider.innerHTML = '\uD83D\uDCBB <strong>Local Models (LM Studio)</strong>';
+  menu.appendChild(divider);
+
   if (availableModels.length === 0) {
-    menu.innerHTML = '<div class="dropdown-empty">No models found.<br>Is LM Studio running?</div>';
+    menu.innerHTML += '<div class="dropdown-empty">No models found.<br>Is LM Studio running?</div>';
     return;
   }
   // Sort: loaded first, then alphabetical
@@ -385,6 +453,18 @@ async function pickModel(modelId) {
 
   // Refresh personality list — model-restricted personalities may appear/disappear
   loadPersonalities();
+
+  // Team of Experts models — always ready, no warmup needed
+  if (isTeamModel(modelId)) {
+    const teamAgent = _TEAM_AGENTS.find(t => t.id === modelId);
+    _validatedCaps[modelId] = { chat: true, tools: true, reasoning: true, embedding: false, vision: modelId === 'team:claude' || modelId === 'team:gemini', limitation: null };
+    selectedModelReady = true;
+    updateModelDisplay();
+    updateActionBtn();
+    showModelLoading(`\uD83E\uDDE0 ${teamAgent?.name || 'Team'} ready`);
+    setTimeout(hideModelLoading, 2000);
+    return;
+  }
 
   showModelLoading(`Loading ${modelId}...`);
   try {

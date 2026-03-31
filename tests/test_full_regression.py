@@ -137,7 +137,7 @@ class TestServiceHealth:
         assert r.status_code == 200
         body = r.json()
         assert body.get("ok") is True or body.get("status") == "ok", f"Unexpected health body: {body}"
-        assert body.get("tools", 0) == 16
+        assert body.get("tools", 0) == 20, f"Expected 20 tools (16 mega + 4 team), got {body.get('tools')}"
 
     def test_mcp_tools_list(self):
         if not _reachable(f"{MCP_URL}/health"):
@@ -147,13 +147,14 @@ class TestServiceHealth:
                        timeout=TIMEOUT)
         assert r.status_code == 200
         tools = r.json()["result"]["tools"]
-        assert len(tools) == 16, f"Expected 16 mega-tools, got {len(tools)}"
+        assert len(tools) == 20, f"Expected 20 tools (16 mega + 4 team), got {len(tools)}"
         names = {t["name"] for t in tools}
-        # Verify all 16 mega-tool names are present
+        # Verify all 16 mega-tool names + 4 team tools are present
         for expected in ("web", "browser", "image", "document", "media", "data",
                          "memory", "knowledge", "vector", "code", "custom_tools",
-                         "planner", "jobs", "research", "think", "system"):
-            assert expected in names, f"Mega-tool '{expected}' missing"
+                         "planner", "jobs", "research", "think", "system",
+                         "team_chat", "team_image", "team_agents", "team_status"):
+            assert expected in names, f"Tool '{expected}' missing"
 
 
 # ===========================================================================

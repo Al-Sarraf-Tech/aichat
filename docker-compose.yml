@@ -238,12 +238,24 @@ services:
       # All tools are free/local — no paid API keys required.
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
+      # Team of Experts — multi-agent orchestration
+      TEAM_ENABLED: "${TEAM_ENABLED:-true}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      TEAM_SSH_HOST: "host.docker.internal"
+      TEAM_SSH_PORT: "1337"
+      TEAM_SSH_USER: "jalsarraf"
+      TEAM_SSH_KEY: "/app/.ssh/team_key"
+      TEAM_QWEN_MODEL: "${TEAM_QWEN_MODEL:-qwen/qwen3.5-9b}"
+      TEAM_GEMINI_MODEL: "${TEAM_GEMINI_MODEL:-gemini-2.5-flash}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       # Read/write the browser screenshot workspace
       - /docker/human_browser/workspace:/browser-workspace
       - /home/jalsarraf/aipictures:/app/pictures
+      # SSH key for Team of Experts CLI agent invocation (Claude, Codex)
+      - /home/jalsarraf/.ssh/automation:/run/secrets/team_ssh_key:ro
     depends_on:
       aichat-data:
         condition: service_healthy

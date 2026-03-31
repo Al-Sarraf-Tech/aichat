@@ -63,7 +63,7 @@ class TestHealthChecks:
             r.raise_for_status()
             data = r.json()
             assert data.get("ok") is True
-            assert data.get("tools", 0) == 16  # 16 mega-tools
+            assert data.get("tools", 0) == 20  # 16 mega-tools + 4 team
 
     def test_clip_health(self):
         with httpx.Client(timeout=10) as c:
