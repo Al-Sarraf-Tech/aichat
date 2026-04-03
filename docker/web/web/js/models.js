@@ -21,17 +21,45 @@ export const MODELS = [
   { id: 'qwen', name: 'Qwen 3.5 (RTX 3090)', provider: 'qwen', icon: '\uD83D\uDFE0', desc: 'QA, summarization — local RTX 3090', cost: 'free', group: 'Local' },
 ];
 
+// ── API Models (direct API key — requires env vars set) ────────
+// Format: api:provider:model — routed via ApiClient, not MCP.
+export const API_MODELS = [
+  { id: 'api:claude:sonnet-4', name: 'Claude Sonnet 4 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — streaming, vision, tools', cost: 'paid', group: 'Anthropic' },
+  { id: 'api:claude:opus-4', name: 'Claude Opus 4 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — most capable', cost: 'paid', group: 'Anthropic' },
+  { id: 'api:claude:haiku-3.5', name: 'Claude Haiku 3.5 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — fast and cheap', cost: 'paid', group: 'Anthropic' },
+  { id: 'api:openai:gpt-5.4', name: 'GPT-5.4 (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — latest OpenAI', cost: 'paid', group: 'OpenAI' },
+  { id: 'api:openai:gpt-4.1', name: 'GPT-4.1 (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — reliable', cost: 'paid', group: 'OpenAI' },
+  { id: 'api:openai:o4-mini', name: 'o4-mini (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — reasoning model', cost: 'paid', group: 'OpenAI' },
+  { id: 'api:google:gemini-2.5-flash', name: 'Gemini 2.5 Flash (API)', provider: 'google', icon: '\uD83D\uDD35', desc: 'Direct API — fast multimodal', cost: 'paid', group: 'Google' },
+  { id: 'api:google:gemini-2.5-pro', name: 'Gemini 2.5 Pro (API)', provider: 'google', icon: '\uD83D\uDD35', desc: 'Direct API — best quality', cost: 'paid', group: 'Google' },
+];
+
+// Model health status cache (populated on dropdown open)
+const _modelHealth = {};
+
 export function isCloudModel(id) {
-  return id && MODELS.some(m => m.id === id);
+  return id && (MODELS.some(m => m.id === id) || API_MODELS.some(m => m.id === id));
 }
 
-// Cloud models use these prefixes for routing
+export function isApiModel(id) { return id && id.startsWith('api:'); }
+
+// CLI models use these prefixes for MCP routing
 const _CLOUD_PREFIXES = ['claude:', 'codex:', 'gemini:'];
 export function isCliModel(id) {
   if (!id) return false;
   if (id === 'qwen') return true;
   return _CLOUD_PREFIXES.some(p => id.startsWith(p));
 }
+
+// Check model health by probing /api/model-status
+export async function checkModelHealth() {
+  try {
+    const r = await authFetch('/api/model-status');
+    const data = await r.json();
+    Object.assign(_modelHealth, data.status || {});
+  } catch {}
+}
+export function getModelHealth(provider) { return _modelHealth[provider] || 'unknown'; }
 
 export function getModelCaps(id) {
   if (!id) return { vision: false, tools: false, reasoning: false, embedding: false };
@@ -108,6 +136,13 @@ export async function pickModel(modelId) {
     emit('model:ready', { text: (m ? m.icon + ' ' + m.name : modelId) + ' ready' });
     return;
   }
+  if (isApiModel(modelId)) {
+    const m = API_MODELS.find(m => m.id === modelId);
+    state.validatedCaps[modelId] = { chat: true, tools: false, reasoning: modelId.includes('o4-') || modelId.includes('opus'), embedding: false, vision: !modelId.includes('o4-'), limitation: null };
+    state.selectedModelReady = true;
+    emit('model:ready', { text: (m ? m.icon + ' ' + m.name : modelId) + ' ready' });
+    return;
+  }
   emit('model:loading', { text: 'Loading ' + modelId + '...' });
   try {
     const res = await authFetch('/api/warmup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: modelId }) });
@@ -154,6 +189,34 @@ export function renderModelMenu() {
     }
   }
 
+  // ── API Models (direct API key) section ──────────────────────────
+  const apiHdr = document.createElement('div'); apiHdr.className = 'dropdown-section-header';
+  apiHdr.textContent = '\uD83D\uDCE1 API Models \u2014 Direct Key';
+  menu.appendChild(apiHdr);
+  const apiByGroup = {};
+  for (const m of API_MODELS) { if (!apiByGroup[m.group]) apiByGroup[m.group] = []; apiByGroup[m.group].push(m); }
+  for (const [group, models] of Object.entries(apiByGroup)) {
+    const groupLabel = document.createElement('div');
+    groupLabel.style.cssText = 'padding:4px 12px;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;';
+    groupLabel.textContent = group;
+    menu.appendChild(groupLabel);
+    for (const m of models) {
+      const btn = document.createElement('button');
+      btn.className = 'dropdown-item api-item' + (m.id === state.selectedModel ? ' active' : '');
+      const row = document.createElement('div'); row.className = 'model-row';
+      const ic = document.createElement('span'); ic.className = 'model-icon'; ic.textContent = m.icon;
+      const nm = document.createElement('span'); nm.className = 'model-id'; nm.textContent = m.name;
+      const costTag = document.createElement('span'); costTag.className = 'meta-tag cost-paid'; costTag.textContent = 'API KEY';
+      const chk = document.createElement('span'); chk.className = 'check'; chk.textContent = m.id === state.selectedModel ? '\u2713' : '';
+      row.appendChild(ic); row.appendChild(nm); row.appendChild(costTag); row.appendChild(chk); btn.appendChild(row);
+      const meta = document.createElement('div'); meta.className = 'model-meta';
+      const tag = document.createElement('span'); tag.className = 'meta-tag'; tag.textContent = m.desc;
+      meta.appendChild(tag); btn.appendChild(meta);
+      btn.onclick = (e) => { e.stopPropagation(); pickModel(m.id); menu.classList.add('hidden'); };
+      menu.appendChild(btn);
+    }
+  }
+
   // ── Local Models section ────────────────────────────────────────
   const divider = document.createElement('div'); divider.className = 'dropdown-section-header';
   divider.textContent = '\uD83D\uDCBB Local Models (LM Studio)';
@@ -185,6 +248,10 @@ export function updateModelDisplay() {
   const caps = document.getElementById('model-caps');
   if (isCliModel(state.selectedModel)) {
     const m = MODELS.find(m => m.id === state.selectedModel);
+    label.textContent = m ? m.icon + ' ' + m.name : state.selectedModel;
+    badge.textContent = m ? m.name : state.selectedModel;
+  } else if (isApiModel(state.selectedModel)) {
+    const m = API_MODELS.find(m => m.id === state.selectedModel);
     label.textContent = m ? m.icon + ' ' + m.name : state.selectedModel;
     badge.textContent = m ? m.name : state.selectedModel;
   } else {

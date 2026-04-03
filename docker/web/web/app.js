@@ -6,7 +6,7 @@
 import { state, on, emit, loadSettings } from './js/state.js';
 import { authFetch, isMobile } from './js/utils.js';
 import { checkAuth, authLogin, authRegister, authLogout, showLogin, showRegister, initAuthKeys } from './js/auth.js';
-import { loadModels, loadToolCount, pickModel, renderModelMenu, updateModelDisplay, updateToolsToggle, isCliModel, MODELS } from './js/models.js';
+import { loadModels, loadToolCount, pickModel, renderModelMenu, updateModelDisplay, updateToolsToggle, isCliModel, isApiModel, MODELS, API_MODELS } from './js/models.js';
 import { loadConversations, newChat, openConversation, toggleSidebar, filterConversations, renderConvList } from './js/conversations.js';
 import { renderMessages, appendMessage, send, stopGeneration, handleFiles, renderAttachments, setupDragDrop } from './js/messages.js';
 import { loadPersonalities, togglePersonalityModal, closePersonalityModal, filterPersonalities, toggleCustomPrompt, applyCustomPrompt, updatePersonalityDisplay } from './js/personalities.js';

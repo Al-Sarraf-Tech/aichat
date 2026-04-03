@@ -52,6 +52,7 @@ class AppRouter {
       ..get('/api/tools', _listTools)
       ..post('/api/tools/refresh', _refreshTools)
       ..get('/api/models', _listModels)
+      ..get('/api/model-status', _modelStatus)
       ..get('/api/personalities', _listPersonalities)
       ..post('/api/warmup', _warmupModel)
       ..post('/api/unload', _unloadModel)
@@ -974,6 +975,32 @@ class AppRouter {
       };
     }).toList();
     return _json({'models': annotated});
+  }
+
+  /// Report which model providers are reachable and configured.
+  Future<Response> _modelStatus(Request request) async {
+    final status = <String, String>{};
+
+    // OAuth CLI agents — always available if SSH is up
+    status['claude'] = 'ok';
+    status['codex'] = 'ok';
+    status['gemini'] = 'ok';
+    status['qwen'] = 'ok';
+
+    // API providers — check if API keys are configured
+    status['anthropic'] = config.anthropicApiKey.isNotEmpty ? 'ok' : 'no_key';
+    status['openai'] = config.openaiApiKey.isNotEmpty ? 'ok' : 'no_key';
+    status['google'] = config.googleApiKey.isNotEmpty ? 'ok' : 'no_key';
+
+    // LM Studio — check if reachable
+    try {
+      final r = await llm.listModels();
+      status['lmstudio'] = r.isNotEmpty ? 'ok' : 'empty';
+    } catch (e) {
+      status['lmstudio'] = 'unreachable';
+    }
+
+    return _json({'status': status});
   }
 
   /// Warmup + validate a model by running e2e tests.
