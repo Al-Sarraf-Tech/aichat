@@ -367,6 +367,42 @@ def error_log(payload: dict) -> dict:
     return {"logged": True}
 
 
+@app.post("/executions/log")
+def execution_log(payload: dict) -> dict:
+    tool_name = str(payload.get("tool_name", "")).strip()[:200]
+    args_summary = str(payload.get("args_summary", "")).strip()[:500]
+    result_summary = str(payload.get("result_summary", "")).strip()[:500]
+    status = str(payload.get("status", "ok")).strip()[:50]
+    duration_ms = int(payload.get("duration_ms", 0))
+    with _pg() as pg:
+        pg.execute(
+            "INSERT INTO tool_executions(tool_name, args_summary, result_summary, status, duration_ms) "
+            "VALUES(%s,%s,%s,%s,%s)",
+            (tool_name, args_summary, result_summary, status, duration_ms),
+        )
+    return {"logged": True}
+
+
+@app.get("/executions/recent")
+def executions_recent(tool: str = Query(default=""), limit: int = Query(default=50)) -> dict:
+    limit = max(1, min(limit, 500))
+    with _pg() as pg:
+        if tool:
+            cur = pg.execute(
+                "SELECT tool_name, args_summary, result_summary, status, duration_ms, ts "
+                "FROM tool_executions WHERE tool_name=%s ORDER BY ts DESC LIMIT %s",
+                (tool, limit),
+            )
+        else:
+            cur = pg.execute(
+                "SELECT tool_name, args_summary, result_summary, status, duration_ms, ts "
+                "FROM tool_executions ORDER BY ts DESC LIMIT %s",
+                (limit,),
+            )
+        rows = cur.fetchall()
+    return {"executions": [{k: (str(v) if not isinstance(v, (str, int, float, type(None), bool)) else v) for k, v in r.items()} for r in rows]}
+
+
 @app.get("/errors/recent")
 def errors_recent(service: str = Query(default=""), limit: int = Query(default=50)) -> dict:
     limit = max(1, min(limit, 500))

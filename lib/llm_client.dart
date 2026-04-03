@@ -34,6 +34,13 @@ class ErrorEvent extends ChatEvent {
   ErrorEvent(this.message);
 }
 
+class UsageEvent extends ChatEvent {
+  final int promptTokens;
+  final int completionTokens;
+  UsageEvent({required this.promptTokens, required this.completionTokens});
+  int get totalTokens => promptTokens + completionTokens;
+}
+
 class LlmClient {
   String baseUrl;
   final String? fallbackUrl;

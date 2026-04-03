@@ -1010,6 +1010,27 @@ async def _report_error(message: str, detail: str | None = None) -> None:
         pass  # never let error reporting crash the MCP server
 
 
+async def _log_tool_execution(
+    tool_name: str, args: dict, result: list, status: str, duration_ms: int,
+) -> None:
+    """Fire-and-forget: log tool execution to aichat-database."""
+    try:
+        args_summary = str(args)[:500] if args else ""
+        result_summary = ""
+        if result:
+            texts = [b.get("text", "") for b in result if isinstance(b, dict) and b.get("type") == "text"]
+            result_summary = " ".join(texts)[:500]
+        async with httpx.AsyncClient(timeout=5) as _c:
+            await _c.post(
+                f"{DATABASE_URL}/executions/log",
+                json={"tool_name": tool_name, "args_summary": args_summary,
+                      "result_summary": result_summary, "status": status,
+                      "duration_ms": duration_ms},
+            )
+    except Exception:
+        pass
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: "Request", exc: Exception) -> "Response":
     from fastapi.responses import JSONResponse as _JSONResponse
@@ -9343,10 +9364,16 @@ async def _handle_rpc(req: dict[str, Any]) -> dict[str, Any] | None:
     if method == "tools/call":
         tool_name  = params.get("name", "")
         arguments  = params.get("arguments") or {}
+        _t0 = _time.monotonic()
         content_blocks = await _get_orchestrator().execute(
             tool_name, _call_tool, tool_name, arguments
         )
+        _dur_ms = int((_time.monotonic() - _t0) * 1000)
         tool_error = _blocks_indicate_error(tool_name, content_blocks)
+        # Fire-and-forget: log tool execution to database
+        asyncio.create_task(_log_tool_execution(
+            tool_name, arguments, content_blocks, "error" if tool_error else "ok", _dur_ms
+        ))
         # DIRECTIVE: Images must ALWAYS render.  Enforce on any image tool
         # (both mega-tool names and resolved handler names) even on error,
         # and also enforce on ANY response that already contains image blocks
@@ -9390,7 +9417,21 @@ async def mcp_post(request: Request) -> Response:
     Clients that prefer a single endpoint send JSON-RPC here.
     If the client sent Accept: text/event-stream we stream back; otherwise JSON.
     """
+    # Request size limit — reject oversized payloads (50MB)
+    content_length = int(request.headers.get("content-length", 0))
+    if content_length > 50_000_000:
+        return Response(
+            content=json.dumps({"jsonrpc": "2.0", "id": None,
+                                "error": {"code": -32600, "message": "Request too large (50MB limit)"}}),
+            media_type="application/json", status_code=413,
+        )
     body = await request.body()
+    if len(body) > 50_000_000:
+        return Response(
+            content=json.dumps({"jsonrpc": "2.0", "id": None,
+                                "error": {"code": -32600, "message": "Request too large (50MB limit)"}}),
+            media_type="application/json", status_code=413,
+        )
     try:
         rpc = json.loads(body)
     except json.JSONDecodeError:

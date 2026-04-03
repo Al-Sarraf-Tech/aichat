@@ -26,13 +26,21 @@ class AppDatabase {
         system_prompt TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        token_count INTEGER NOT NULL DEFAULT 0
+        token_count INTEGER NOT NULL DEFAULT 0,
+        is_developer_mode INTEGER NOT NULL DEFAULT 0
       )
     ''');
     // Migration: add user_id column for per-user chat isolation
     try {
       _db.execute(
           "ALTER TABLE conversations ADD COLUMN user_id TEXT NOT NULL DEFAULT ''");
+    } catch (_) {
+      // Column already exists — safe to ignore
+    }
+    // Migration: add is_developer_mode column
+    try {
+      _db.execute(
+          "ALTER TABLE conversations ADD COLUMN is_developer_mode INTEGER NOT NULL DEFAULT 0");
     } catch (_) {
       // Column already exists — safe to ignore
     }
@@ -78,13 +86,23 @@ class AppDatabase {
     String title = 'New Chat',
     String model = '',
     String systemPrompt = '',
+    bool isDeveloperMode = false,
   }) {
     final cid = id ?? _uuid.v4();
     final now = DateTime.now().toIso8601String();
     _db.execute(
-      'INSERT INTO conversations (id, user_id, title, model, system_prompt, created_at, updated_at) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [cid, userId, title, model, systemPrompt, now, now],
+      'INSERT INTO conversations (id, user_id, title, model, system_prompt, created_at, updated_at, is_developer_mode) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        cid,
+        userId,
+        title,
+        model,
+        systemPrompt,
+        now,
+        now,
+        isDeveloperMode ? 1 : 0,
+      ],
     );
     return Conversation(
       id: cid,
@@ -92,6 +110,7 @@ class AppDatabase {
       title: title,
       model: model,
       systemPrompt: systemPrompt,
+      isDeveloperMode: isDeveloperMode,
     );
   }
 
@@ -133,6 +152,7 @@ class AppDatabase {
     String? title,
     String? model,
     String? systemPrompt,
+    bool? isDeveloperMode,
   }) {
     final sets = <String>[];
     final args = <Object?>[];
@@ -147,6 +167,10 @@ class AppDatabase {
     if (systemPrompt != null) {
       sets.add('system_prompt = ?');
       args.add(systemPrompt);
+    }
+    if (isDeveloperMode != null) {
+      sets.add('is_developer_mode = ?');
+      args.add(isDeveloperMode ? 1 : 0);
     }
     if (sets.isEmpty) return;
     sets.add('updated_at = ?');
@@ -189,10 +213,11 @@ class AppDatabase {
     required String content,
     List<ToolCallData>? toolCalls,
     String? toolCallId,
+    int? tokenCount,
   }) {
     final mid = _uuid.v4();
     final now = DateTime.now().toIso8601String();
-    final tokens = estimateTokens(content);
+    final tokens = tokenCount ?? estimateTokens(content);
     final tcJson = toolCalls != null
         ? jsonEncode(toolCalls.map((t) => t.toJson()).toList())
         : null;
@@ -256,6 +281,50 @@ class AppDatabase {
     updateTokenCount(conversationId);
   }
 
+  // ── Search ─────────────────────────────────────────────────────────
+
+  List<Map<String, dynamic>> searchMessages({
+    required String query,
+    String userId = '',
+    int limit = 20,
+  }) {
+    // Use LIKE for simple substring search (SQLite FTS is not set up)
+    final pattern = '%$query%';
+    final sql = userId.isNotEmpty
+        ? '''SELECT m.conversation_id, m.role, m.content, m.created_at,
+                    c.title as conversation_title
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE c.user_id = ? AND m.role IN ('user', 'assistant')
+               AND m.content LIKE ?
+             ORDER BY m.created_at DESC
+             LIMIT ?'''
+        : '''SELECT m.conversation_id, m.role, m.content, m.created_at,
+                    c.title as conversation_title
+             FROM messages m
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE m.role IN ('user', 'assistant')
+               AND m.content LIKE ?
+             ORDER BY m.created_at DESC
+             LIMIT ?''';
+
+    final args = userId.isNotEmpty
+        ? [userId, pattern, limit]
+        : [pattern, limit];
+
+    final result = _db.select(sql, args);
+    return result.map<Map<String, dynamic>>((row) {
+      final content = row['content'] as String;
+      return <String, dynamic>{
+        'conversation_id': row['conversation_id'] as String,
+        'conversation_title': row['conversation_title'] as String,
+        'role': row['role'] as String,
+        'content': content.length > 200 ? content.substring(0, 200) : content,
+        'created_at': row['created_at'] as String,
+      };
+    }).toList();
+  }
+
   // ── Compaction Log ─────────────────────────────────────────────────
 
   void logCompaction({
@@ -284,6 +353,7 @@ class AppDatabase {
     createdAt: DateTime.parse(row['created_at'] as String),
     updatedAt: DateTime.parse(row['updated_at'] as String),
     tokenCount: row['token_count'] as int,
+    isDeveloperMode: (row['is_developer_mode'] as int? ?? 0) == 1,
   );
 
   Message _rowToMessage(Row row) {

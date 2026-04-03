@@ -686,6 +686,8 @@ class AppRouter {
           case ToolCallsEvent(:final toolCalls):
             pendingToolCalls = toolCalls;
             iterationHasToolCalls = true;
+          case UsageEvent():
+            break; // LM Studio doesn't emit usage; ignore if seen
           case DoneEvent(:final finishReason):
             if (finishReason == 'tool_calls' && pendingToolCalls.isNotEmpty) {
               // Store assistant message with tool calls
@@ -1526,13 +1528,17 @@ class AppRouter {
   }
 
   Future<Response> _imageDownload(Request request, String filename) async {
+    final userId = _getUserId(request);
     // Sanitize filename to prevent path traversal
     final safe = filename.replaceAll(RegExp(r'[^a-zA-Z0-9_.\-]'), '');
     if (safe.isEmpty || safe.contains('..')) {
       return _json({'error': 'Invalid filename'}, status: 400);
     }
     final picDir = '/app/pictures';
-    final file = File('$picDir/$safe');
+    // User-scoped: check user subdirectory first, fall back to shared dir
+    final userFile = File('$picDir/$userId/$safe');
+    final sharedFile = File('$picDir/$safe');
+    final file = userFile.existsSync() ? userFile : sharedFile;
     if (!file.existsSync()) {
       return _json({'error': 'File not found'}, status: 404);
     }
@@ -1546,10 +1552,18 @@ class AppRouter {
     } catch (e) {
       return _json({'error': 'File access error'}, status: 500);
     }
+    // Determine content type from extension
+    final ext = safe.split('.').last.toLowerCase();
+    final contentType = switch (ext) {
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      'gif' => 'image/gif',
+      _ => 'image/jpeg',
+    };
     return Response.ok(
       file.openRead(),
       headers: {
-        'Content-Type': 'image/jpeg',
+        'Content-Type': contentType,
         'Content-Disposition': 'attachment; filename="$safe"',
         'Cache-Control': 'public, max-age=86400',
       },
@@ -2410,6 +2424,7 @@ class AppRouter {
     }
 
     final buffer = StringBuffer();
+    int totalPrompt = 0, totalCompletion = 0;
     try {
       await for (final event in apiClient.chatStream(
         provider: provider,
@@ -2426,6 +2441,9 @@ class AppRouter {
             _sseEvent(controller, 'token', {'text': text});
           case ReasoningTokenEvent(:final text):
             _sseEvent(controller, 'thinking', {'text': text});
+          case UsageEvent(:final promptTokens, :final completionTokens):
+            totalPrompt += promptTokens;
+            totalCompletion += completionTokens;
           case ErrorEvent(:final message):
             _sseEvent(controller, 'error', {'message': message});
           case DoneEvent():
@@ -2438,15 +2456,20 @@ class AppRouter {
       _sseEvent(controller, 'error', {'message': 'Stream error: $e'});
     }
 
-    // Save assistant response
+    // Save assistant response with real token count if available
     final responseText = buffer.toString();
     if (responseText.isNotEmpty) {
+      final realTokens = totalPrompt + totalCompletion;
       db.addMessage(
         conversationId: conversationId,
         role: 'assistant',
         content: responseText,
+        tokenCount: realTokens > 0 ? realTokens : null,
       );
       db.updateTokenCount(conversationId);
+      if (realTokens > 0) {
+        _log.info('API chat tokens: prompt=$totalPrompt completion=$totalCompletion total=$realTokens model=$model');
+      }
     }
 
     _sseEvent(controller, 'done', {});
