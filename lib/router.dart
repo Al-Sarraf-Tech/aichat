@@ -527,55 +527,40 @@ class AppRouter {
     }
 
     try {
-      final result = await _withKeepalive(controller, () => mcp.callTool('chat', {
+      // Stream tokens directly from MCP → SSE to frontend
+      final accumulator = StringBuffer();
+      await for (final chunk in mcp.callToolStreamingWithRecovery('chat', {
         'message': userContent,
         'agent': agent,
         if (context.isNotEmpty) 'context': context,
         if (modelVersion.isNotEmpty) 'model': modelVersion,
         if (effort.isNotEmpty) 'effort': effort,
-      }));
-
-      final isError = result['isError'] == true;
-
-      final content = result['content'] as List?;
-      if (content == null || content.isEmpty) {
-        _sseEvent(controller, 'token', {'text': 'No response from $agent.'});
-      } else {
-        final fullText = content
-            .whereType<Map>()
-            .where((b) => b['type'] == 'text')
-            .map((b) => b['text'] as String? ?? '')
-            .join('\n');
-        final hasAgentError = RegExp(r'(^|\n\n)❌ Error:').hasMatch(fullText);
-
-        if (isError || hasAgentError) {
-          _sseEvent(controller, 'error', {'message': fullText});
-        } else {
-          for (final block in content) {
-            final m = Map<String, dynamic>.from(block as Map);
-            if (m['type'] == 'text') {
-              _sseEvent(controller, 'token', {'text': m['text'] as String? ?? ''});
-            } else if (m['type'] == 'image') {
-              _sseEvent(controller, 'tool_result', {
-                'name': 'image_pipeline',
-                'result': jsonEncode([
-                  {'type': 'image_url', 'data': m['data'], 'mime_type': m['mimeType'] ?? 'image/jpeg'},
-                ]),
-              });
-            }
-          }
-        }
+      })) {
+        accumulator.write(chunk);
+        _sseEvent(controller, 'token', {'text': chunk});
       }
 
-      final textContent = McpClient.extractText(result);
+      final fullText = accumulator.toString();
+      if (fullText.isEmpty) {
+        _sseEvent(controller, 'token', {'text': 'No response from $agent.'});
+      }
+
+      // Check for error markers in accumulated text
+      if (RegExp(r'(^|\n\n)❌ Error:').hasMatch(fullText)) {
+        _sseEvent(controller, 'error', {'message': fullText});
+      }
+
+      // Store assistant response in DB
       db.addMessage(
         conversationId: conversationId,
         role: 'assistant',
-        content: textContent,
+        content: fullText,
       );
       db.updateTokenCount(conversationId);
 
       _sseEvent(controller, 'done', {});
+    } on McpStreamException catch (e) {
+      _sseEvent(controller, 'error', {'message': 'Chat error ($agent): ${e.message}'});
     } catch (e) {
       _sseEvent(controller, 'error', {'message': 'Chat error ($agent): $e'});
     } finally {

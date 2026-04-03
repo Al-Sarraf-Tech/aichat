@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Jamal's AI Lab</title>
-  <link rel="stylesheet" href="style.css?v=33">
+  <link rel="stylesheet" href="style.css?v=41">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/DOMPurify/3.0.8/purify.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
-  <!-- Auth Screen — shown when not logged in -->
+  <!-- Auth Screen -->
   <div id="auth-screen">
     <div class="auth-container">
       <div class="auth-logo">&#129302;</div>
@@ -19,7 +19,6 @@
       <p class="auth-sub" id="auth-sub">Sign in to continue</p>
       <div id="auth-msg" class="hidden"></div>
 
-      <!-- Login Form -->
       <div id="auth-login">
         <div class="auth-field"><input type="text" id="login-user" placeholder="Username" autocomplete="username" autocapitalize="none"></div>
         <div class="auth-field"><input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"></div>
@@ -27,7 +26,6 @@
         <p class="auth-switch">No account? <a href="#" onclick="showRegister();return false">Request Access</a></p>
       </div>
 
-      <!-- Register Form -->
       <div id="auth-register" class="hidden">
         <div class="auth-field"><input type="text" id="reg-user" placeholder="Choose a username (3+ chars)" autocomplete="username" autocapitalize="none"></div>
         <div class="auth-field"><input type="password" id="reg-pass" placeholder="Password (10+ chars, upper, number, symbol)" autocomplete="new-password"></div>
@@ -61,7 +59,7 @@
     <main id="main">
       <div id="error-banner" class="hidden"></div>
       <header id="topbar">
-        <button id="menu-btn" onclick="toggleSidebar()" title="Toggle sidebar">
+        <button id="menu-btn" onclick="toggleSidebar()" title="Toggle sidebar (Ctrl+/)" aria-label="Toggle sidebar">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div id="tab-nav">
@@ -69,25 +67,23 @@
           <button class="tab-btn" data-tab="imagegen" onclick="switchTab('imagegen')">Image Gen</button>
         </div>
         <div id="model-selector">
-          <button id="model-btn" onclick="toggleModelMenu()">
+          <button id="model-btn" onclick="toggleModelMenu()" aria-label="Select model" aria-haspopup="listbox">
             <span id="model-label">Loading models...</span>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
           <div id="model-menu" class="dropdown hidden"></div>
         </div>
         <span id="model-caps"></span>
-        <!-- Tools toggle -->
         <button id="tools-toggle" onclick="toggleTools()" title="Toggle MCP tools">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
           <span id="tools-label">Tools ON</span>
         </button>
         <div class="topbar-end"></div>
-        <button id="topbar-logout" onclick="authLogout()" title="Sign out">
+        <button id="topbar-logout" onclick="authLogout()" title="Sign out" aria-label="Sign out">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </button>
       </header>
 
-      <!-- Model loading progress bar -->
       <div id="model-loading" class="hidden">
         <div class="loading-bar"><div class="loading-bar-progress"></div></div>
         <span id="loading-text">Loading model...</span>
@@ -99,7 +95,6 @@
             <div class="welcome-logo">&#129302;</div>
             <h1>Jamal's AI Lab</h1>
             <p class="welcome-sub">What can I help you with?</p>
-            <!-- Personality selector -->
             <div id="personality-bar">
               <button id="personality-btn" onclick="togglePersonalityModal()">
                 <span id="personality-icon"></span>
@@ -145,24 +140,45 @@
           <div class="ig-container">
             <div class="ig-controls">
               <h2 class="ig-title">Image Generation</h2>
+              <!-- Prompt Templates -->
+              <div id="ig-templates" class="ig-templates"></div>
               <div class="ig-model-select">
                 <label>Model</label>
-                <div class="ig-model-grid">
-                  <button class="ig-model-btn active" data-model="flux_schnell" onclick="selectIgModel(this)">
-                    <span class="ig-model-name">FLUX Schnell</span>
-                    <span class="ig-model-meta">4 steps &middot; ~3s &middot; 1024px</span>
-                  </button>
-                  <button class="ig-model-btn" data-model="flux_dev" onclick="selectIgModel(this)">
-                    <span class="ig-model-name">FLUX Dev</span>
-                    <span class="ig-model-meta">25 steps &middot; ~15s &middot; 1024px</span>
-                  </button>
-                  <button class="ig-model-btn" data-model="sdxl_lightning" onclick="selectIgModel(this)">
+                <label class="ig-section-label">Fast Models</label>
+                <div class="ig-model-grid" id="ig-models-fast">
+                  <button class="ig-model-btn active" data-model="sdxl_lightning" data-ckpt="sd_xl_base_1.0.safetensors" data-unet="sdxl_lightning_4step.safetensors" onclick="selectIgModel(this)">
                     <span class="ig-model-name">SDXL Lightning</span>
                     <span class="ig-model-meta">4 steps &middot; ~2s &middot; 1024px</span>
                   </button>
-                  <button class="ig-model-btn" data-model="sdxl_turbo" onclick="selectIgModel(this)">
+                  <button class="ig-model-btn" data-model="sdxl_turbo" data-ckpt="sdxl_turbo.safetensors" onclick="selectIgModel(this)">
                     <span class="ig-model-name">SDXL Turbo</span>
                     <span class="ig-model-meta">1 step &middot; ~1s &middot; 512px</span>
+                  </button>
+                </div>
+                <label class="ig-section-label">Quality Models</label>
+                <div class="ig-model-grid" id="ig-models-quality">
+                  <button class="ig-model-btn" data-model="dreamshaper" data-ckpt="dreamshaper_8.safetensors" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">DreamShaper v8</span>
+                    <span class="ig-model-meta">25 steps &middot; artistic &middot; 512px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="realistic_vision" data-ckpt="realistic_vision_v5.safetensors" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">Realistic Vision</span>
+                    <span class="ig-model-meta">30 steps &middot; photorealism &middot; 512px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="deliberate" data-ckpt="deliberate_v3.safetensors" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">Deliberate v3</span>
+                    <span class="ig-model-meta">25 steps &middot; stylized &middot; 512px</span>
+                  </button>
+                </div>
+                <label class="ig-section-label">FLUX</label>
+                <div class="ig-model-grid" id="ig-models-flux">
+                  <button class="ig-model-btn" data-model="flux_schnell" data-unet="flux1-schnell.safetensors" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">FLUX Schnell</span>
+                    <span class="ig-model-meta">4 steps &middot; ~3s &middot; 1024px</span>
+                  </button>
+                  <button class="ig-model-btn" data-model="flux_dev" data-unet="flux1-dev.safetensors" onclick="selectIgModel(this)">
+                    <span class="ig-model-name">FLUX Dev</span>
+                    <span class="ig-model-meta">25 steps &middot; best quality &middot; 1024px</span>
                   </button>
                 </div>
                 <div class="ig-model-status">
@@ -178,7 +194,54 @@
                 <label for="ig-negative">Negative Prompt <span class="ig-optional">(optional)</span></label>
                 <input id="ig-negative" type="text" placeholder="blurry, low quality, distorted...">
               </div>
+              <!-- Reference Image (img2img) -->
+              <div class="ig-field">
+                <label>Reference Image <span class="ig-optional">(for img2img)</span></label>
+                <div id="ig-ref-dropzone" class="ig-dropzone">
+                  <input type="file" id="ig-ref-input" accept="image/*" class="hidden">
+                  <div id="ig-ref-placeholder">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                    <span>Drop image or click to upload</span>
+                  </div>
+                  <img id="ig-ref-preview" class="hidden" alt="Reference">
+                  <button id="ig-ref-clear" class="hidden" onclick="clearRefImage()">Clear</button>
+                </div>
+                <div class="ig-row" id="ig-ref-controls" style="display:none">
+                  <div class="ig-field ig-half">
+                    <label for="ig-denoise">Modification Strength</label>
+                    <div class="ig-range-wrap">
+                      <input id="ig-denoise" type="range" min="0.1" max="1.0" step="0.05" value="0.65" oninput="document.getElementById('ig-denoise-val').textContent=this.value">
+                      <span id="ig-denoise-val">0.65</span>
+                    </div>
+                  </div>
+                  <div class="ig-field ig-half">
+                    <button class="ig-search-ref-btn" onclick="searchRefImage()">Search Reference</button>
+                  </div>
+                </div>
+              </div>
+              <!-- Aspect Ratio + Resolution -->
               <div class="ig-row">
+                <div class="ig-field ig-half">
+                  <label for="ig-aspect">Aspect Ratio</label>
+                  <select id="ig-aspect" onchange="updateIgDimensions()">
+                    <option value="1:1" selected>1:1 (Square)</option>
+                    <option value="16:9">16:9 (Landscape)</option>
+                    <option value="9:16">9:16 (Portrait)</option>
+                    <option value="4:3">4:3 (Classic)</option>
+                    <option value="3:2">3:2 (Photo)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+                <div class="ig-field ig-half">
+                  <label for="ig-resolution">Output Resolution</label>
+                  <select id="ig-resolution">
+                    <option value="1024" selected>1024px (Standard)</option>
+                    <option value="2048">2048px (2K upscaled)</option>
+                    <option value="4096">4096px (4K upscaled)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="ig-row" id="ig-custom-dims" style="display:none">
                 <div class="ig-field ig-half">
                   <label for="ig-width">Width</label>
                   <select id="ig-width">
@@ -206,7 +269,54 @@
                   <input id="ig-seed" type="number" placeholder="random" min="0">
                 </div>
               </div>
-              <button id="ig-generate-btn" onclick="generateImage()">Generate</button>
+              <!-- Batch count + ControlNet -->
+              <div class="ig-row">
+                <div class="ig-field ig-half">
+                  <label for="ig-count">Variations</label>
+                  <select id="ig-count">
+                    <option value="1" selected>1 image</option>
+                    <option value="2">2 images</option>
+                    <option value="3">3 images</option>
+                    <option value="4">4 images</option>
+                  </select>
+                </div>
+                <div class="ig-field ig-half">
+                  <label>&nbsp;</label>
+                  <button id="ig-generate-btn" onclick="generateImage()">Generate</button>
+                </div>
+              </div>
+              <!-- ControlNet (collapsible) -->
+              <details id="ig-controlnet-section" class="ig-controlnet">
+                <summary>ControlNet (Advanced)</summary>
+                <div class="ig-row">
+                  <div class="ig-field ig-half">
+                    <label for="ig-cn-type">Type</label>
+                    <select id="ig-cn-type">
+                      <option value="none" selected>None</option>
+                      <option value="openpose">OpenPose (pose)</option>
+                      <option value="depth">Depth Map</option>
+                      <option value="canny">Canny Edge</option>
+                    </select>
+                  </div>
+                  <div class="ig-field ig-half">
+                    <label for="ig-cn-strength">Strength</label>
+                    <div class="ig-range-wrap">
+                      <input id="ig-cn-strength" type="range" min="0.1" max="1.0" step="0.05" value="0.8" oninput="document.getElementById('ig-cn-strength-val').textContent=this.value">
+                      <span id="ig-cn-strength-val">0.8</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="ig-field">
+                  <div id="ig-cn-dropzone" class="ig-dropzone ig-dropzone-sm">
+                    <input type="file" id="ig-cn-input" accept="image/*" class="hidden">
+                    <span>Drop control image or click to upload</span>
+                    <img id="ig-cn-preview" class="hidden" alt="Control">
+                    <button id="ig-cn-clear" class="hidden" onclick="clearControlNetImage()">Clear</button>
+                  </div>
+                </div>
+              </details>
+              <!-- Inpaint button (appears after image exists) -->
+              <button id="ig-inpaint-btn" class="hidden" onclick="openInpaintMode()">Inpaint (Edit Region)</button>
             </div>
             <div class="ig-output">
               <div id="ig-preview" class="ig-preview-empty">
@@ -228,20 +338,43 @@
                 <span id="ig-loading-text">Generating...</span>
               </div>
               <div id="ig-gallery"></div>
+              <!-- Inpaint Canvas Overlay -->
+              <div id="ig-inpaint-overlay" class="hidden">
+                <div class="ig-inpaint-toolbar">
+                  <label>Brush: <input id="ig-inpaint-brush" type="range" min="5" max="80" value="30"></label>
+                  <button onclick="clearInpaintMask()">Clear Mask</button>
+                  <button class="ig-inpaint-generate" onclick="generateInpaint()">Generate Inpaint</button>
+                  <button onclick="closeInpaintMode()">Cancel</button>
+                </div>
+                <div class="ig-inpaint-canvas-wrap">
+                  <canvas id="ig-inpaint-canvas"></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
+      <!-- Scroll to bottom FAB -->
+      <button id="scroll-fab" class="scroll-fab hidden" onclick="scrollChatToBottom()" title="Scroll to bottom" aria-label="Scroll to bottom">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+
       <div id="input-box">
-        <input type="file" id="file-input" multiple onchange="handleFiles(this)" class="hidden" accept="image/*,.txt,.py,.js,.ts,.json,.md,.csv,.yaml,.yml,.xml,.html,.css,.sh,.bash,.dart,.go,.rs,.java,.c,.cpp,.h,.hpp,.rb,.php,.sql,.toml,.cfg,.conf,.log">
+        <input type="file" id="file-input" multiple onchange="handleFiles(this)" class="hidden" accept="image/*,.txt,.py,.js,.ts,.json,.md,.csv,.yaml,.yml,.xml,.html,.css,.sh,.bash,.dart,.go,.rs,.java,.c,.cpp,.h,.hpp,.rb,.php,.sql,.toml,.cfg,.conf,.log,.pdf">
         <div id="attachments" class="hidden"></div>
         <div id="input-row">
-          <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files">
+          <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files" aria-label="Attach files">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
           </button>
+          <button id="voice-btn" class="hidden" title="Voice input" aria-label="Voice input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
           <textarea id="input" rows="1" placeholder="Message AI Lab..." onkeydown="handleKey(event)" oninput="handleInput()"></textarea>
-          <button id="action-btn" onclick="handleAction()" disabled title="Send message">
+          <button id="preview-btn" title="Preview markdown (Ctrl+P)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+          <button id="action-btn" onclick="handleAction()" disabled title="Send message" aria-label="Send message">
             <svg id="icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
             <svg id="icon-stop" viewBox="0 0 24 24" fill="currentColor" width="20" height="20" class="hidden"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
           </button>
@@ -250,6 +383,33 @@
       </div>
     </main>
   </div>
-  <script src="app.js?v=33"></script>
+  <!-- Keyboard Shortcuts Help -->
+  <div id="shortcuts-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeShortcuts()">
+    <div class="modal-content shortcuts-content">
+      <div class="modal-header"><h2>Keyboard Shortcuts</h2><button class="modal-close" onclick="closeShortcuts()">&times;</button></div>
+      <div class="shortcuts-grid">
+        <div class="shortcut-group">
+          <h3>Navigation</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>/</kbd><span>Toggle sidebar</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Search conversations</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>N</kbd><span>New conversation</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>,</kbd><span>Settings</span></div>
+        </div>
+        <div class="shortcut-group">
+          <h3>Chat</h3>
+          <div class="shortcut-row"><kbd>Enter</kbd><span>Send message</span></div>
+          <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Enter</kbd><span>New line</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd><span>Stop generation</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Preview markdown</span></div>
+        </div>
+        <div class="shortcut-group">
+          <h3>General</h3>
+          <div class="shortcut-row"><kbd>?</kbd><span>This help panel</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd><span>Toggle theme</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="app.js?v=41"></script>
 </body>
 </html>

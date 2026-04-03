@@ -236,6 +236,101 @@ class McpClient {
     }
   }
 
+  // ── Streaming Call Tool ────────────────────────────────────────
+
+  /// Stream tool results via SSE. Yields text chunks per content_block event.
+  /// The final 'message' event terminates the stream.
+  /// Throws [McpStreamException] on errors.
+  Stream<String> callToolStreaming(
+    String name,
+    Map<String, dynamic> arguments,
+  ) async* {
+    final body = jsonEncode({
+      'jsonrpc': '2.0',
+      'id': _nextId++,
+      'method': 'tools/call',
+      'params': {'name': name, 'arguments': arguments},
+    });
+
+    final request = http.Request('POST', Uri.parse('$baseUrl/mcp'));
+    request.headers['Content-Type'] = 'application/json';
+    request.headers['Accept'] = 'text/event-stream';
+    request.body = body;
+
+    final http.StreamedResponse response;
+    try {
+      response = await _client.send(request).timeout(const Duration(seconds: 15));
+    } catch (e) {
+      throw McpStreamException('Connection failed: $e');
+    }
+
+    if (response.statusCode != 200) {
+      final respBody = await response.stream.bytesToString();
+      throw McpStreamException('HTTP ${response.statusCode}: $respBody');
+    }
+
+    var buffer = '';
+    var currentEvent = '';
+    await for (final chunk in response.stream.transform(const Utf8Decoder())) {
+      buffer += chunk;
+      final lines = buffer.split('\n');
+      buffer = lines.removeLast();
+      for (final line in lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.substring(7).trim();
+        } else if (line.startsWith('data: ') && currentEvent.isNotEmpty) {
+          final dataStr = line.substring(6).trim();
+          try {
+            final data = jsonDecode(dataStr) as Map<String, dynamic>;
+            if (currentEvent == 'content_block') {
+              final delta = data['delta'] as Map<String, dynamic>?;
+              final text = delta?['text'] as String? ?? '';
+              if (text.isNotEmpty) yield text;
+            } else if (currentEvent == 'message') {
+              // Final MCP result — check for errors
+              final error = data['error'] as Map<String, dynamic>?;
+              if (error != null) {
+                throw McpStreamException(
+                    error['message'] as String? ?? 'MCP stream error');
+              }
+              final result = data['result'] as Map<String, dynamic>?;
+              if (result?['isError'] == true) {
+                final text = extractText(result!);
+                throw McpStreamException(text);
+              }
+              return; // stream complete
+            }
+          } catch (e) {
+            if (e is McpStreamException) rethrow;
+            // JSON parse error — skip malformed line
+          }
+          currentEvent = '';
+        }
+      }
+    }
+  }
+
+  /// Streaming call with auto-recovery on connection failure before first chunk.
+  Stream<String> callToolStreamingWithRecovery(
+    String name,
+    Map<String, dynamic> arguments,
+  ) async* {
+    try {
+      await for (final chunk in callToolStreaming(name, arguments)) {
+        yield chunk;
+      }
+    } on McpStreamException catch (e) {
+      if (e.message.contains('Connection') || e.message.contains('failed')) {
+        _log.info('Streaming call "$name" failed — attempting recovery');
+        if (await _autoRecover()) {
+          yield* callToolStreaming(name, arguments);
+          return;
+        }
+      }
+      rethrow;
+    }
+  }
+
   String _textFromResult(Map<String, dynamic> result) {
     final content = result['content'] as List?;
     if (content == null || content.isEmpty) return '';
@@ -277,4 +372,12 @@ class McpClient {
     }
     return images;
   }
+}
+
+/// Exception thrown by streaming MCP tool calls.
+class McpStreamException implements Exception {
+  final String message;
+  McpStreamException(this.message);
+  @override
+  String toString() => 'McpStreamException: $message';
 }

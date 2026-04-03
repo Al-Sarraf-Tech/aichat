@@ -51,6 +51,10 @@ on('view:welcome', () => {
 on('view:chat', () => {
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('chat-view').classList.remove('hidden');
+  // Restore draft if available
+  const draft = localStorage.getItem('ailab-draft-' + (state.currentConvId || 'new'));
+  const inp = document.getElementById('input');
+  if (draft && inp && !inp.value.trim()) { inp.value = draft; handleInput(); }
 });
 
 on('messages:render', (msgs) => renderMessages(msgs));
@@ -127,6 +131,14 @@ function handleInput() {
   i.style.height = 'auto';
   i.style.height = Math.min(i.scrollHeight, 200) + 'px';
   updateActionBtn();
+  // Draft auto-save (debounced 1.5s)
+  clearTimeout(handleInput._dt);
+  handleInput._dt = setTimeout(() => {
+    const val = i.value;
+    const key = 'ailab-draft-' + (state.currentConvId || 'new');
+    if (val.trim()) localStorage.setItem(key, val);
+    else localStorage.removeItem(key);
+  }, 1500);
 }
 
 // ── Tab Navigation ───────────────────────────────────────────────
