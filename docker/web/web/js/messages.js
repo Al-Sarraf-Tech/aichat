@@ -257,8 +257,17 @@ export async function send() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload), signal: state.abortController.signal,
     });
-    if (!res.ok) { spinner.remove(); contentEl.textContent = 'Server error ' + res.status; contentEl.style.color = 'var(--error)';
-      aDiv.classList.remove('streaming'); state.isStreaming=false; state.sendLock=false; state.abortController=null; emit('input:changed'); return; }
+    if (!res.ok) {
+      spinner.remove();
+      const errMsg = res.status === 429 ? 'Too many requests \u2014 please wait a moment'
+        : res.status >= 500 ? 'Backend error \u2014 try again in a few seconds'
+        : 'Request failed (' + res.status + ')';
+      const retryCard = document.createElement('div'); retryCard.className = 'retry-card';
+      retryCard.innerHTML = '<span class="retry-msg">' + errMsg + '</span><button class="retry-btn">Retry</button>';
+      retryCard.querySelector('.retry-btn').onclick = () => { retryCard.remove(); aDiv.remove(); send(text, files); };
+      contentEl.appendChild(retryCard);
+      aDiv.classList.remove('streaming'); state.isStreaming=false; state.sendLock=false; state.abortController=null; emit('input:changed'); return;
+    }
     const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
     while (true) {
       if (state.currentConvId !== streamConvId || state.selectedModel !== streamModel) { try { reader.cancel(); } catch {} break; }
@@ -325,7 +334,16 @@ export async function send() {
         ev = null;
       }
     }
-  } catch (e) { if (e.name !== 'AbortError') { const ep = document.createElement('p'); ep.style.color='var(--error)'; ep.textContent='Error: '+e.message; contentEl.appendChild(ep); } }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      const errMsg = e.message.includes('network') || e.message.includes('Failed to fetch')
+        ? 'Connection lost \u2014 check your internet' : 'Error: ' + e.message;
+      const retryCard = document.createElement('div'); retryCard.className = 'retry-card';
+      retryCard.innerHTML = '<span class="retry-msg">' + errMsg + '</span><button class="retry-btn">Retry</button>';
+      retryCard.querySelector('.retry-btn').onclick = () => { retryCard.remove(); aDiv.remove(); send(text, files); };
+      contentEl.appendChild(retryCard);
+    }
+  }
 
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   if (toolTimerInterval) { clearInterval(toolTimerInterval); toolTimerInterval = null; }

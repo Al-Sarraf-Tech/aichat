@@ -9,7 +9,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_VISION_URL = "http://localhost:8097"
+_DEFAULT_VISION_URL = "http://localhost:8099"
 
 
 class VisionMCPTool:

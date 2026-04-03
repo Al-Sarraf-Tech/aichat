@@ -10,7 +10,7 @@ class MemoryToolError(ToolRequestError):
 
 
 class MemoryTool:
-    def __init__(self, base_url: str = "http://localhost:8094") -> None:
+    def __init__(self, base_url: str = "http://localhost:8091") -> None:
         self.base_url = base_url.rstrip("/")
 
     async def _request(self, method: str, path: str, **kwargs: object) -> dict:

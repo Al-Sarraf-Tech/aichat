@@ -361,6 +361,44 @@ html, body {
 }
 #menu-btn:hover { color: var(--text-primary); }
 
+/* ── Confirm Dialog ──────────────────────────────────────────────── */
+.confirm-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+}
+.confirm-dialog {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 20px 24px;
+  min-width: 300px; max-width: 400px; box-shadow: var(--shadow-lg);
+}
+.confirm-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.confirm-body { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; word-break: break-word; }
+.confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.confirm-cancel, .confirm-delete {
+  padding: 8px 16px; border-radius: var(--radius-sm); font-size: 14px;
+  cursor: pointer; font-family: inherit; border: none;
+}
+.confirm-cancel { background: var(--bg-input); color: var(--text-primary); }
+.confirm-cancel:hover { background: var(--border); }
+.confirm-delete { background: var(--error); color: #fff; }
+.confirm-delete:hover { opacity: 0.9; }
+
+/* ── Retry Card ──────────────────────────────────────────────────── */
+.retry-card {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; margin-top: 8px;
+  background: rgba(239, 83, 80, 0.08); border: 1px solid rgba(239, 83, 80, 0.3);
+  border-radius: var(--radius-sm); color: var(--text-primary);
+}
+.retry-card .retry-msg { flex: 1; font-size: 13px; }
+.retry-card .retry-btn {
+  padding: 6px 14px; border-radius: var(--radius-sm); font-size: 13px;
+  background: var(--accent); color: #fff; border: none; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.retry-card .retry-btn:hover { background: var(--accent-hover); }
+
 /* ── Model Selector ─────────────────────────────────────────────── */
 #model-selector {
   position: relative;
@@ -2137,6 +2175,35 @@ html, body {
 }
 
 /* ── Conversation List Enhancements ───────────────────────────── */
+/* ── Conversation Empty State ──────────────────────────────────── */
+.conv-empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: 32px 16px; color: var(--text-muted);
+  font-size: 13px; text-align: center;
+}
+.conv-empty-icon { font-size: 32px; opacity: 0.4; margin-bottom: 4px; }
+.conv-empty-hint { font-size: 12px; opacity: 0.7; }
+.conv-empty-hint kbd {
+  background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px;
+  font-size: 11px; font-family: var(--font-mono);
+}
+/* ── Inline Rename ───────────────────────────────────────────────── */
+.conv-title.editing {
+  background: var(--bg-input); border-radius: 4px; padding: 2px 4px;
+  outline: 1px solid var(--accent); cursor: text;
+}
+/* ── Search Highlight ────────────────────────────────────────────── */
+.conv-title mark { background: rgba(255, 213, 79, 0.3); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* ── Welcome Tips ────────────────────────────────────────────────── */
+.welcome-tips {
+  font-size: 12px; color: var(--text-muted); text-align: center;
+  padding: 12px; opacity: 0.7;
+}
+.welcome-tips kbd {
+  background: var(--bg-secondary); padding: 1px 5px; border-radius: 3px;
+  font-size: 11px; font-family: var(--font-mono);
+}
+
 .conv-section-header {
   font-size: 11px;
   text-transform: uppercase;

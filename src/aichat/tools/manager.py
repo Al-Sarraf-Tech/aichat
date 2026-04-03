@@ -83,7 +83,7 @@ _IMG_FETCH_HEADERS = {
 _LM_STUDIO_URL = os.environ.get(
     "IMAGE_GEN_BASE_URL", os.environ.get("LM_STUDIO_URL", "http://192.168.50.2:1234")
 )
-_VISION_MCP_URL = os.environ.get("VISION_MCP_URL", "http://localhost:8097")
+_VISION_MCP_URL = os.environ.get("VISION_MCP_URL", "http://localhost:8099")
 
 
 def _dhash(img: object) -> str:
