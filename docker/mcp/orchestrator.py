@@ -29,7 +29,7 @@ class TaskIntent(str, Enum):
     IMAGE_CV       = "image_cv"             # detect, clip, face, enhance
     CODE_SYSTEM    = "code_system"          # code_run, jupyter, shell
     MEMORY         = "memory"               # store, recall, compact
-    TEAM           = "team"                 # team_chat, team_image, team_agents
+    CHAT           = "chat"                 # chat, image_generate
     WORKSPACE      = "workspace"            # workspace file operations
     MIXED          = "mixed"                # orchestrate, plan_task
 
@@ -110,11 +110,9 @@ _INTENT_MAP: dict[str, TaskIntent] = {
     # Mixed
     "orchestrate": TaskIntent.MIXED,
     "plan_task": TaskIntent.MIXED,
-    # Team of Experts
-    "team_chat": TaskIntent.TEAM,
-    "team_image": TaskIntent.TEAM,
-    "team_status": TaskIntent.TEAM,
-    "team_agents": TaskIntent.TEAM,
+    # Chat / pipeline
+    "chat": TaskIntent.CHAT,
+    "image_pipeline": TaskIntent.IMAGE_CV,
     # Workspace
     "workspace": TaskIntent.WORKSPACE,
 }
@@ -131,7 +129,7 @@ _CONCURRENCY_LIMITS: dict[TaskIntent, int] = {
     TaskIntent.IMAGE_CV: 1,  # GPU-bound
     TaskIntent.CODE_SYSTEM: 1,  # isolation
     TaskIntent.MEMORY: 8,  # lightweight DB ops
-    TaskIntent.TEAM: 2,  # team workflows can be long-running
+    TaskIntent.CHAT: 2,  # chat/image workflows can be long-running
     TaskIntent.WORKSPACE: 4,  # lightweight file I/O
     TaskIntent.MIXED: 2,
 }

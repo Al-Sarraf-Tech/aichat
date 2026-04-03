@@ -3,7 +3,7 @@
     "aichat": {
       "url": "http://localhost:8096/sse",
       "transport": "sse",
-      "description": "aichat MCP platform \u2014 83 tools for browser, vision, docs, memory, graph, vector, jobs, and more.",
+      "description": "aichat MCP platform \u2014 85 tools for chat, browser, vision, image pipeline, docs, memory, graph, vector, jobs, and more.",
       "tools": [
         {
           "name": "batch_submit",
@@ -230,6 +230,62 @@
             },
             "required": [
               "tool_name"
+            ]
+          }
+        },
+        {
+          "name": "chat",
+          "description": "Send a chat message to a specific agent (Claude, Codex, Gemini, or Qwen). Each agent is invoked directly via its OAuth CLI or local API \u2014 no auto-routing.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "The message to send."
+              },
+              "agent": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "gemini",
+                  "qwen"
+                ],
+                "description": "Which agent to use."
+              },
+              "model": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "haiku",
+                  "sonnet",
+                  "opus",
+                  "gemini-2.0-flash",
+                  "gemini-2.5-flash",
+                  "gemini-2.5-pro"
+                ],
+                "description": "Specific model version. Empty = agent default."
+              },
+              "effort": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "low",
+                  "medium",
+                  "high",
+                  "max",
+                  "xhigh"
+                ],
+                "description": "Effort/reasoning level. Empty = agent default."
+              },
+              "context": {
+                "type": "string",
+                "description": "Optional additional context."
+              }
+            },
+            "required": [
+              "message",
+              "agent"
             ]
           }
         },
@@ -969,6 +1025,66 @@
               "seed": {
                 "type": "integer",
                 "description": "Random seed for reproducible results (optional, -1 = random)."
+              }
+            },
+            "required": [
+              "prompt"
+            ]
+          }
+        },
+        {
+          "name": "image_pipeline",
+          "description": "Multi-backend image creation pipeline. Pipeline: Qwen (prompt engineering) -> Arc A380 (quick draft) -> Gemini/Claude (vision review) -> ComfyUI/Gemini/OpenAI (final render). Modes: draft (Arc only, 512x512, ~1s), fast (Qwen prompt -> ComfyUI schnell, ~5s), quality (full pipeline + CLIP scoring, ~30-45s), ultra (full pipeline, ~60-90s), compare (all backends in parallel).",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "description": "What to generate."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "fast",
+                  "quality",
+                  "ultra",
+                  "compare"
+                ],
+                "description": "Quality/speed mode. Default: quality."
+              },
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "comfyui",
+                  "gemini",
+                  "openai",
+                  "arc",
+                  "all"
+                ],
+                "description": "Image generation backend. Default: auto."
+              },
+              "style": {
+                "type": "string",
+                "description": "Style hint (photorealistic, anime, oil_painting, digital_art, etc.)."
+              },
+              "aspect_ratio": {
+                "type": "string",
+                "enum": [
+                  "1:1",
+                  "16:9",
+                  "9:16",
+                  "4:3",
+                  "3:2",
+                  "3:4",
+                  "2:3"
+                ],
+                "description": "Aspect ratio. Default: 1:1."
+              },
+              "count": {
+                "type": "integer",
+                "description": "Number of variations (1-4). Default: 1."
               }
             },
             "required": [

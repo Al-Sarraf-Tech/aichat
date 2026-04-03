@@ -348,8 +348,8 @@ class TestOrchestrateSchema:
         assert soe.get("type") == "boolean"
 
     def test_total_tools_count(self):
-        """Platform now has exactly 21 tools (16 mega + 4 team)."""
-        assert len(_TOOLS) == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {len(_TOOLS)}"
+        """Platform now has exactly 19 tools (16 mega + chat + image_pipeline + workspace)."""
+        assert len(_TOOLS) == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {len(_TOOLS)}"
 
 
 # ===========================================================================

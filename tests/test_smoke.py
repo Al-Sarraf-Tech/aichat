@@ -105,12 +105,12 @@ def test_mcp_health_includes_tools() -> None:
     assert r.status_code == 200
     body = r.json()
     assert "tools" in body, f"Missing 'tools' in MCP health: {body}"
-    assert body["tools"] == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {body['tools']}"
+    assert body["tools"] == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {body['tools']}"
 
 
 @pytest.mark.smoke
 def test_mcp_tools_list_via_jsonrpc() -> None:
-    """MCP server must respond to tools/list JSON-RPC request with ≥21 tools."""
+    """MCP server must respond to tools/list JSON-RPC request with 19 tools."""
     base_url = _MCP_URL
     if not _is_reachable(f"{base_url}/health"):
         pytest.skip("aichat-mcp not reachable")
@@ -124,12 +124,12 @@ def test_mcp_tools_list_via_jsonrpc() -> None:
     assert r.status_code == 200
     body = r.json()
     tools = body.get("result", {}).get("tools", [])
-    assert len(tools) == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {len(tools)}"
+    assert len(tools) == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {len(tools)}"
     tool_names = {t["name"] for t in tools}
     for expected in ("web", "browser", "image", "document", "media", "data",
                      "memory", "knowledge", "vector", "code", "custom_tools",
                      "planner", "jobs", "research", "think", "system",
-                     "team_chat", "team_image", "team_agents", "team_status",
+                     "chat", "image_pipeline",
                      "workspace"):
         assert expected in tool_names, f"Tool '{expected}' missing from MCP tools list"
 

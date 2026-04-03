@@ -469,6 +469,16 @@ Image generation runs on **ComfyUI** (WSL2, RTX 3090) with dynamic workflow cons
 6. Generated images are fetched from ComfyUI, saved to `/app/pictures/`, and returned as download URLs
 7. The frontend polls `/api/image/job/{jobId}` every 2s to display progress and results
 
+### Current QA Caveats (2026-04-01)
+
+- `/api/image/generate` still hard-requires `COMFYUI_URL`, even when the caller selects `backend=openai` or `backend=gemini`, and the router currently relies on undocumented `image_pipeline(mode="direct")` behavior for cloud renders.
+- Non-square cloud requests are not trustworthy yet: the Dart router emits ad-hoc aspect ratios, while `image_pipeline` only advertises a fixed enum set and falls back to `1024x1024` outside it.
+- Batch generation is not production-ready. Local `count > 1` still fans out to uninitialized child job IDs, cloud `count` is forwarded but ignored in `docker/mcp/agents.py`, and multi-image saves still reuse the same output filename pattern.
+- Inpaint is not release-ready: the browser closes inpaint mode before polling, never marks the request as actively generating, and posts preview-scaled canvas dimensions instead of the source image size.
+- ComfyUI workflow variants still need correction: SDXL Lightning img2img/inpaint skip the Lightning UNet merge, and ControlNet hardcodes SD1.5 weights plus a fixed SDXL base checkpoint instead of respecting the selected model.
+- Saved image access is not user-scoped yet. `/api/image/download/<filename>` authorizes by sanitized filename only, so guessed filenames can expose another user’s saved image.
+- There is still no focused automated coverage for `/api/image/*`, image-job ownership, download authorization, API aspect-ratio mapping, batch aggregation, or imagegen UI polling/inpaint flows.
+
 ### ComfyUI Configuration
 
 ComfyUI runs in Docker on WSL2 with these optimizations for the 32GB RAM / 24GB VRAM environment:
@@ -739,6 +749,14 @@ aichat/
 | Max 4 images per response | Hardcoded in router.dart; increase `maxImagesPerResponse` if needed |
 | WhatsApp QR must be scanned manually at `:8097` | By design — no credential storage |
 | Reasoning models (phi-4) fill `max_tokens` with thinking tokens | Use dense instruction models for tool-heavy tasks |
+
+### QA Follow-Ups (2026-04-01)
+
+- The Dart backend still uses a split-trust auth model. If it is reachable without the Flask auth proxy, routes that derive scope from `X-Auth-User` still fall back to global access.
+- Image generation artifacts are not fully user-scoped yet. Terminal image jobs currently lose `user_id`, polling is keyed only by `jobId`, and persisted files are still downloadable by filename.
+- Request and stream memory limits are incomplete in the Dart and browser layers. Large JSON bodies, attachment payloads, and long SSE lines still need explicit backend/client caps.
+- The `chat` tool's `inputSchema` now declares `model` and `effort` parameters. Verify schema-aware clients pick them up correctly.
+- Image generation v3 still needs targeted QA coverage for `/api/image/*`, workflow node contracts, multi-image aggregation, cloud backend conditioning, and inpaint browser flows.
 
 ---
 

@@ -57,12 +57,12 @@ _EXPECTED_MEGA_TOOLS = {
     "web", "browser", "image", "document", "media", "data",
     "memory", "knowledge", "vector", "code", "custom_tools",
     "planner", "jobs", "research", "think", "system",
-    "team_chat", "team_image", "team_agents", "team_status",
+    "chat", "image_pipeline",
     "workspace",
 }
 
 # Non-mega tools — use their own schema (not the mega-tool action pattern)
-_TEAM_TOOLS = {"team_chat", "team_image", "team_agents", "team_status"}
+_STANDALONE_TOOLS = {"chat", "image_pipeline"}
 
 # Expected actions per mega-tool (minimum set that must exist)
 _EXPECTED_ACTIONS = {
@@ -98,10 +98,10 @@ _CRITICAL_HANDLERS = {
 
 @skip_load
 class TestToolCount:
-    def test_exactly_20_tools(self):
-        """Platform must expose exactly 21 tools (16 mega + 4 team)."""
+    def test_exactly_19_tools(self):
+        """Platform must expose exactly 19 tools (16 mega + chat + image_pipeline + workspace)."""
         count = len(_TOOLS)
-        assert count == 21, f"Expected 21 tools (16 mega + 4 team + 1 workspace), got {count}."
+        assert count == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {count}."
 
     def test_no_duplicate_names(self):
         """Every tool name must be unique."""
@@ -142,8 +142,8 @@ class TestDispatchMap:
 
     def test_dispatch_map_has_all_tools(self):
         mapped = set(_MEGA_TOOL_MAP.keys())
-        # think has no dispatch entry; team_* tools are dispatched separately
-        expected = _EXPECTED_MEGA_TOOLS - {"think"} - _TEAM_TOOLS
+        # think has no dispatch entry; standalone tools (chat, image_pipeline) are dispatched separately
+        expected = _EXPECTED_MEGA_TOOLS - {"think"} - _STANDALONE_TOOLS
         missing = expected - mapped
         assert not missing, f"Tools missing from dispatch map: {missing}"
 
@@ -175,9 +175,9 @@ class TestSchemaContracts:
         return {}
 
     def test_all_mega_tools_have_action_enum(self):
-        """Every mega-tool (except think and team_*) must have an action enum."""
+        """Every mega-tool (except think and standalone tools) must have an action enum."""
         for t in _TOOLS:
-            if t["name"] == "think" or t["name"] in _TEAM_TOOLS:
+            if t["name"] == "think" or t["name"] in _STANDALONE_TOOLS:
                 continue
             props = t.get("inputSchema", {}).get("properties", {})
             assert "action" in props, f"Tool '{t['name']}' missing action property"
@@ -212,9 +212,9 @@ class TestSchemaContracts:
         assert "path" in props or "url" in props, "document must have path or url property"
 
     def test_action_is_required(self):
-        """action must be in 'required' for all mega-tools except think and team_*."""
+        """action must be in 'required' for all mega-tools except think and standalone tools."""
         for t in _TOOLS:
-            if t["name"] == "think" or t["name"] in _TEAM_TOOLS:
+            if t["name"] == "think" or t["name"] in _STANDALONE_TOOLS:
                 continue
             required = t.get("inputSchema", {}).get("required", [])
             assert "action" in required, f"Tool '{t['name']}' must require action"

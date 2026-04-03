@@ -217,7 +217,7 @@ services:
       IMAGE_GEN_BASE_URL: ${IMAGE_GEN_BASE_URL:-http://192.168.50.2:1234}
       IMAGE_GEN_MODEL:  "${IMAGE_GEN_MODEL:-}"
       # ComfyUI — dedicated diffusion server on WSL2 RTX 3090 (preferred for image gen)
-      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8188}"
+      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8388}"
       EMBED_MODEL: "${EMBED_MODEL:-}"
       # GPU idle TTL — auto-unload models after idle period (seconds, 0=disable)
       GPU_IDLE_TTL: "${GPU_IDLE_TTL:-600}"
@@ -238,8 +238,7 @@ services:
       # All tools are free/local — no paid API keys required.
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
-      # Team of Experts — multi-agent orchestration
-      TEAM_ENABLED: "${TEAM_ENABLED:-true}"
+      # CLI agent chat (OAuth) + image generation
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       TEAM_SSH_HOST: "host.docker.internal"
@@ -254,7 +253,7 @@ services:
       # Read/write the browser screenshot workspace
       - /docker/human_browser/workspace:/browser-workspace
       - /home/jalsarraf/aipictures:/app/pictures
-      # SSH key for Team of Experts CLI agent invocation (Claude, Codex)
+      # SSH key for CLI agent chat (Claude, Codex, Gemini)
       - /home/jalsarraf/.ssh/automation:/run/secrets/team_ssh_key:ro
       # Per-user workspace — scripts, images, documents
       - ./workspace:/workspace
@@ -436,8 +435,11 @@ services:
       TOOL_ROUTER_URL: http://192.168.50.2:1235
       LM_STUDIO_URL: http://192.168.50.2:1234
       LM_STUDIO_FALLBACK_URL: http://100.78.39.76:1234
-      COMFYUI_URL: "${COMFYUI_URL:-http://100.91.44.100:8188}"
+      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8388}"
       VISION_GEN_URL: http://aichat-vision:8099/generate
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
       DB_PATH: /app/data/dartboard.db
       WEB_DIR: /app/web
     extra_hosts:

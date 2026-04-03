@@ -969,12 +969,31 @@ def _get_source_strategy():
 # ---------------------------------------------------------------------------
 
 import logging as _logging
+import json as _json_mod
 
 _log = _logging.getLogger("aichat-mcp")
-_logging.basicConfig(
-    level=_logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+
+
+class _JsonFormatter(_logging.Formatter):
+    """Structured JSON log formatter with request context."""
+
+    def format(self, record: _logging.LogRecord) -> str:
+        doc = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+            "request_id": _current_request_id.get(""),
+            "session_id": _current_session_id.get(""),
+        }
+        if record.exc_info and record.exc_info[1]:
+            doc["exc"] = self.formatException(record.exc_info)
+        return _json_mod.dumps(doc, default=str)
+
+
+_log_handler = _logging.StreamHandler()
+_log_handler.setFormatter(_JsonFormatter())
+_logging.basicConfig(handlers=[_log_handler], level=_logging.INFO, force=True)
 _SERVICE_NAME = "aichat-mcp"
 
 
@@ -1773,51 +1792,53 @@ _TOOLS: list[dict[str, Any]] = [
         },
     },
     # ==================================================================
-    # Team of Experts — multi-agent orchestration
+    # Chat — direct agent invocation
     # ==================================================================
     {
-        "name": "team_chat",
+        "name": "chat",
         "description": (
-            "Send a message to the Team of Experts — a multi-agent system with Claude (sonnet), "
-            "Codex (gpt-5.4), Gemini, Qwen (RTX 3090), and more. The router picks the best agent "
-            "for your task (preferring free local agents first), or you can force a specific agent.\n"
-            "Task types: simple_qa, summarization, creative, research, code_review, architecture, "
-            "security, debugging, testing, documentation, formatting, validation.\n"
-            "Agents: auto (router picks), claude, codex, gemini, qwen."
+            "Send a chat message to a specific agent (Claude, Codex, Gemini, or Qwen). "
+            "Each agent is invoked directly via its OAuth CLI or local API — no auto-routing."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "The task, question, or message to send."},
-                "task_type": {
-                    "type": "string",
-                    "enum": ["auto", "simple_qa", "summarization", "creative", "research",
-                             "code_review", "architecture", "security", "debugging",
-                             "testing", "documentation", "formatting", "validation"],
-                    "description": "Task type for routing. Default: auto (classified from message).",
-                },
+                "message": {"type": "string", "description": "The message to send."},
                 "agent": {
                     "type": "string",
-                    "enum": ["auto", "claude", "codex", "gemini", "qwen"],
-                    "description": "Force a specific agent. Default: auto (router picks best).",
+                    "enum": ["claude", "codex", "gemini", "qwen"],
+                    "description": "Which agent to use.",
+                },
+                "model": {
+                    "type": "string",
+                    "enum": ["", "haiku", "sonnet", "opus",
+                             "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
+                    "description": "Specific model version. Empty = agent default.",
+                },
+                "effort": {
+                    "type": "string",
+                    "enum": ["", "low", "medium", "high", "max", "xhigh"],
+                    "description": "Effort/reasoning level. Empty = agent default.",
                 },
                 "context": {"type": "string", "description": "Optional additional context."},
             },
-            "required": ["message"],
+            "required": ["message", "agent"],
         },
     },
+    # Image pipeline — multi-backend generation
+    # ==================================================================
     {
-        "name": "team_image",
+        "name": "image_pipeline",
         "description": (
-            "Multi-agent image creation pipeline with the Team of Experts.\n"
-            "Pipeline: Qwen (prompt engineering) → Arc A380 (quick draft) → Gemini/Claude "
-            "(vision review) → ComfyUI/Gemini/OpenAI (final render).\n"
+            "Multi-backend image creation pipeline.\n"
+            "Pipeline: Qwen (prompt engineering) -> Arc A380 (quick draft) -> Gemini/Claude "
+            "(vision review) -> ComfyUI/Gemini/OpenAI (final render).\n"
             "Modes:\n"
             "  draft   — Arc only, 512x512, ~1s (FREE)\n"
-            "  fast    — Qwen prompt → ComfyUI schnell, 1024x1024, ~5s (FREE)\n"
+            "  fast    — Qwen prompt -> ComfyUI schnell, 1024x1024, ~5s (FREE)\n"
             "  quality — Full pipeline, CLIP-scored best result, ~30-45s (FREE*)\n"
             "  ultra   — Full pipeline, CLIP-scored best result, ~60-90s (FREE*)\n"
-            "  compare — All backends in parallel → multiple results\n"
+            "  compare — All backends in parallel -> multiple results\n"
             "Backends: auto, comfyui (FLUX.1-dev), gemini, openai, all."
         ),
         "inputSchema": {
@@ -1844,19 +1865,6 @@ _TOOLS: list[dict[str, Any]] = [
             },
             "required": ["prompt"],
         },
-    },
-    {
-        "name": "team_agents",
-        "description": (
-            "List all Team of Experts agents with their availability, capabilities, and cost tier. "
-            "Shows which agents are currently reachable (Claude, Codex, Gemini, Qwen, Arc, ComfyUI)."
-        ),
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "team_status",
-        "description": "Check status of Team of Experts system — agent availability and health.",
-        "inputSchema": {"type": "object", "properties": {}},
     },
     # ==================================================================
     # Workspace — per-user file storage
@@ -9131,32 +9139,33 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                     lines_all.append("\nCall with category='<name>' to list tools in that category.")
                     return _text("\n".join(lines_all))
 
-            # ── Team of Experts ─────────────────────────────────────
-            if name == "team_chat":
-                from team import team_chat as _team_chat, get_progress_reporter
-                pr = get_progress_reporter()
-                # Wire progress to MCP SSE if not already done
+            # ── Chat — direct agent invocation ─────────────────────
+            if name == "chat":
+                from agents import chat as _chat
                 msg_text = str(args.get("message", "")).strip()
                 if not msg_text:
-                    return _text("team_chat: 'message' is required")
-                result = await _team_chat(
+                    return _text("chat: 'message' is required")
+                agent_name = str(args.get("agent", "")).strip()
+                if not agent_name:
+                    return _text("chat: 'agent' is required")
+                result = await _chat(
                     msg_text,
-                    task_type=str(args.get("task_type", "auto")),
-                    agent=str(args.get("agent", "auto")),
+                    agent=agent_name,
+                    model=str(args.get("model", "")),
+                    effort=str(args.get("effort", "")),
                     context=str(args.get("context", "")),
                 )
-                header = f"🧠 **Team of Experts** — Agent: **{result.agent}** ({result.elapsed_s}s)"
+                header = f"**{result.agent}** ({result.elapsed_s}s)"
                 if result.success:
                     return _text(f"{header}\n\n{result.content}")
-                # Sanitize error — strip internal IPs, paths, and hostnames
                 safe_err = _sanitize_error(result.error)
                 return _text(f"{header}\n\n❌ Error: {safe_err}")
 
-            if name == "team_image":
-                from team import image_pipeline, get_progress_reporter, ImageResult
+            if name == "image_pipeline":
+                from agents import image_pipeline, ImageResult
                 prompt_img = str(args.get("prompt", "")).strip()
                 if not prompt_img:
-                    return _text("team_image: 'prompt' is required")
+                    return _text("image_pipeline: 'prompt' is required")
                 results = await image_pipeline(
                     prompt_img,
                     mode=str(args.get("mode", "quality")),
@@ -9183,35 +9192,10 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                         blocks.append({"type": "text",
                                        "text": f"❌ {img.backend}: {img.error}"})
                 if not blocks:
-                    return _text("team_image: no images generated — check agent availability with team_agents")
-                # Prepend header
+                    return _text("image_pipeline: no images generated")
                 blocks.insert(0, {"type": "text",
-                                  "text": f"🧠 **Team of Experts — Image Pipeline** ({len(results)} result(s))"})
+                                  "text": f"**Image Pipeline** ({len(results)} result(s))"})
                 return blocks
-
-            if name == "team_agents":
-                from team import team_agents as _team_agents, TEAM_ENABLED as _TE
-                if not _TE:
-                    return _text("🧠 Team of Experts is **disabled** (TEAM_ENABLED=false)")
-                agents = await _team_agents()
-                lines = ["🧠 **Team of Experts — Agent Fleet**\n"]
-                for a in agents:
-                    status = "✅" if a["available"] else "❌"
-                    lines.append(f"  {status} **{a['name']}** ({a['cost']}) — {', '.join(a['capabilities'][:5])}...")
-                return _text("\n".join(lines))
-
-            if name == "team_status":
-                from team import team_agents as _team_agents_st, TEAM_ENABLED
-                if not TEAM_ENABLED:
-                    return _text("🧠 Team of Experts is **disabled** (TEAM_ENABLED=false)")
-                agents = await _team_agents_st()
-                avail = sum(1 for a in agents if a["available"])
-                return _text(
-                    f"🧠 **Team of Experts — Status**\n"
-                    f"  Enabled: ✅\n"
-                    f"  Agents: {avail}/{len(agents)} available\n"
-                    f"  Fleet: {', '.join(a['name'] for a in agents if a['available'])}"
-                )
 
             # ── Workspace — per-user file storage ──────────────────────
             if name == "workspace":
@@ -9427,7 +9411,47 @@ async def mcp_post(request: Request) -> Response:
         extra_headers["Mcp-Session-Id"] = str(uuid.uuid4())
 
     if "text/event-stream" in accept:
-        # Non-blocking: stream keepalives while the tool runs, yield result when done.
+        # ── Streaming chat path: yield content_block events per chunk ──
+        async def _chat_stream_rpc(rpc: dict):
+            """Stream chat response token-by-token via SSE."""
+            req_id = rpc.get("id")
+            params = rpc.get("params") or {}
+            arguments = params.get("arguments") or {}
+            msg = str(arguments.get("message", "")).strip()
+            agent_name = str(arguments.get("agent", "")).strip()
+            if not msg:
+                yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'content': [{'type': 'text', 'text': 'chat: message is required'}], 'isError': True}})}\n\n"
+                return
+            if not agent_name:
+                yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'content': [{'type': 'text', 'text': 'chat: agent is required'}], 'isError': True}})}\n\n"
+                return
+            full_text = ""
+            try:
+                from agents import chat_stream
+                async with asyncio.timeout(620):
+                    async for chunk in chat_stream(
+                        msg, agent=agent_name,
+                        model=str(arguments.get("model", "")),
+                        effort=str(arguments.get("effort", "")),
+                        context=str(arguments.get("context", "")),
+                    ):
+                        full_text += chunk
+                        yield f"event: content_block\ndata: {json.dumps({'index': 0, 'delta': {'type': 'text_delta', 'text': chunk}})}\n\n"
+            except (ValueError, RuntimeError) as exc:
+                safe_err = _sanitize_error(str(exc))
+                yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'content': [{'type': 'text', 'text': f'❌ Error: {safe_err}'}], 'isError': True}})}\n\n"
+                return
+            except asyncio.TimeoutError:
+                yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32000, 'message': 'Chat stream timed out (620s)'}})}\n\n"
+                return
+            except Exception as exc:
+                safe_err = _sanitize_error(str(exc))
+                yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32000, 'message': safe_err}})}\n\n"
+                return
+            # Final result with full accumulated text
+            yield f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': req_id, 'result': {'content': [{'type': 'text', 'text': full_text}], 'isError': False}})}\n\n"
+
+        # ── Non-streaming tools: keepalive path ──
         async def _stream_result(rpc: dict):
             task = asyncio.create_task(_handle_rpc(rpc))
             elapsed = 0.0
@@ -9456,7 +9480,11 @@ async def mcp_post(request: Request) -> Response:
                 return
             if result is not None:
                 yield f"event: message\ndata: {json.dumps(result)}\n\n"
-        return StreamingResponse(_stream_result(rpc), media_type="text/event-stream",
+
+        # Route: streaming chat vs keepalive for other tools
+        tool_name = (rpc.get("params") or {}).get("name", "") if method == "tools/call" else ""
+        gen = _chat_stream_rpc(rpc) if tool_name == "chat" else _stream_result(rpc)
+        return StreamingResponse(gen, media_type="text/event-stream",
                                  headers={**_SSE_HEADERS, **extra_headers})
 
     # JSON (non-SSE) path — synchronous; used only by non-LM-Studio clients.
@@ -9568,11 +9596,52 @@ async def messages(request: Request, sessionId: str = "") -> Response:
 # Health
 # ---------------------------------------------------------------------------
 
+async def _probe_ssh() -> str:
+    """Check SSH connectivity to host (5s timeout)."""
+    try:
+        from agents import _run_ssh_cli, _ssh_cb
+        if _ssh_cb.is_open:
+            return "circuit_open"
+        r = await _run_ssh_cli("probe", "echo ok", timeout_s=5.0)
+        return "ok" if r.success and "ok" in r.content else f"exit_{r.exit_code}"
+    except Exception as exc:
+        return f"error: {str(exc)[:80]}"
+
+
+async def _probe_lmstudio() -> str:
+    """Check LM Studio availability (3s timeout)."""
+    try:
+        from agents import LMSTUDIO_URL
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{LMSTUDIO_URL}/v1/models")
+            return "ok" if r.is_success else f"http_{r.status_code}"
+    except Exception as exc:
+        return f"error: {str(exc)[:80]}"
+
+
+async def _probe_comfyui() -> str:
+    """Check ComfyUI availability (3s timeout)."""
+    try:
+        from agents import COMFYUI_URL
+        if not COMFYUI_URL:
+            return "not_configured"
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{COMFYUI_URL}/system_stats")
+            return "ok" if r.is_success else f"http_{r.status_code}"
+    except Exception as exc:
+        return f"error: {str(exc)[:80]}"
+
+
 @app.get("/health")
 async def health() -> dict:
+    ssh_s, lm_s, comfy_s = await asyncio.gather(
+        _probe_ssh(), _probe_lmstudio(), _probe_comfyui(),
+    )
+    deps_ok = ssh_s == "ok" and lm_s == "ok"
     gpu = GpuDetector.detect()
     return {
-        "ok": True,
+        "ok": deps_ok,
+        "deps": {"ssh": ssh_s, "lmstudio": lm_s, "comfyui": comfy_s},
         "sessions": len(_sessions),
         "tools": len(_TOOLS),
         "transports": ["POST /mcp (streamable-http)", "GET /sse (sse)", "GET /mcp (sse-alias)"],

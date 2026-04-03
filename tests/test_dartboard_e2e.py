@@ -1,7 +1,7 @@
 """Comprehensive Playwright e2e tests for Dartboard web UI.
 
 Tests the full user-facing flow through the auth proxy:
-  Login → Model selection → Team of Experts → Chat → Error handling
+  Login → Model selection → Cloud Models → Chat → Error handling
 
 Requires:
   - Docker stack running with ports overlay
@@ -105,17 +105,17 @@ class TestLogin:
 
 
 # ---------------------------------------------------------------------------
-# Team of Experts UI Tests
+# Model Selector UI Tests
 # ---------------------------------------------------------------------------
 
 @skip_no_playwright
 @skip_no_auth
-class TestTeamModelSelector:
-    """Test Team of Experts model selection in the Dartboard dropdown."""
+class TestModelSelector:
+    """Test cloud model selection in the Dartboard dropdown."""
 
     @pytest.mark.asyncio
-    async def test_team_section_in_dropdown(self):
-        """Model dropdown should show Team of Experts section."""
+    async def test_cloud_section_in_dropdown(self):
+        """Model dropdown should show Cloud Models section."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -123,12 +123,12 @@ class TestTeamModelSelector:
             await page.click('#model-btn')
             await page.wait_for_timeout(500)
             body = await page.content()
-            assert "Team of Experts" in body, "Team of Experts section missing from dropdown"
+            assert "Cloud Models" in body, "Cloud Models section missing from dropdown"
             await browser.close()
 
     @pytest.mark.asyncio
-    async def test_team_agents_listed(self):
-        """All 5 team agents should appear in the dropdown."""
+    async def test_providers_listed(self):
+        """Claude, Codex, Gemini, and Qwen should appear in the dropdown."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -136,23 +136,23 @@ class TestTeamModelSelector:
             await page.click('#model-btn')
             await page.wait_for_timeout(500)
             body = await page.content()
-            for agent in ["Auto", "Claude", "Codex", "Gemini", "Qwen"]:
-                assert agent in body, f"Team agent '{agent}' missing from dropdown"
+            for agent in ["Claude", "GPT-5.4", "Gemini", "Qwen"]:
+                assert agent in body, f"Model '{agent}' missing from dropdown"
             await browser.close()
 
     @pytest.mark.asyncio
-    async def test_select_team_auto(self):
-        """Selecting team:auto should show 'Team' badge and mark as ready."""
+    async def test_select_cloud_model(self):
+        """Selecting a cloud model should mark it as ready."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
             await _do_login(page)
             await page.click('#model-btn')
             await page.wait_for_timeout(500)
-            await page.locator('.team-item').first.click()
+            await page.locator('.api-item').first.click()
             await page.wait_for_timeout(1000)
             body = await page.content()
-            assert "Team" in body or "team" in body
+            assert "ready" in body.lower()
             await browser.close()
 
 
@@ -165,11 +165,11 @@ class TestTeamModelSelector:
 class TestDoubleSubmitPrevention:
     """Verify the _sendLock prevents multiple rapid Enter presses."""
 
-    async def _login_and_select_team(self, page: "Page") -> None:
+    async def _login_and_select_model(self, page: "Page") -> None:
         await _do_login(page)
         await page.click('#model-btn')
         await page.wait_for_timeout(500)
-        await page.locator('.team-item').first.click()
+        await page.locator('.api-item').first.click()
         await page.wait_for_timeout(1000)
 
     @pytest.mark.asyncio
@@ -178,7 +178,7 @@ class TestDoubleSubmitPrevention:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            await self._login_and_select_team(page)
+            await self._login_and_select_model(page)
             has_lock = await page.evaluate("typeof _sendLock !== 'undefined'")
             assert has_lock, "_sendLock variable missing from app.js"
             await browser.close()
@@ -189,7 +189,7 @@ class TestDoubleSubmitPrevention:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            await self._login_and_select_team(page)
+            await self._login_and_select_model(page)
             input_el = page.locator('#input')
             await input_el.fill("hello test 12345")
             for _ in range(5):
@@ -201,48 +201,45 @@ class TestDoubleSubmitPrevention:
 
 
 # ---------------------------------------------------------------------------
-# SSE Keepalive + Team Chat Flow Tests
+# SSE Keepalive + Chat Flow Tests
 # ---------------------------------------------------------------------------
 
 @skip_no_playwright
 @skip_no_auth
 @skip_no_mcp
-class TestTeamChatFlow:
-    """Test actual team_chat message flow through the full stack."""
+class TestCliChatFlow:
+    """Test CLI chat message flow through the full stack."""
 
     async def _login_and_select_model(self, page: "Page", model_idx: int = 0) -> None:
         await _do_login(page)
         await page.click('#model-btn')
         await page.wait_for_timeout(500)
-        await page.locator('.team-item').nth(model_idx).click()
+        await page.locator('.api-item').nth(model_idx).click()
         await page.wait_for_timeout(1000)
 
     @pytest.mark.asyncio
-    async def test_team_auto_responds(self):
-        """Sending a message with team:auto should return a response."""
+    async def test_cloud_model_responds(self):
+        """Sending a message with a cloud model should return a response."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
-            await self._login_and_select_model(page, 0)  # team:auto
+            await self._login_and_select_model(page, 0)
 
             input_el = page.locator('#input')
             await input_el.fill("What is 2+2? Reply with just the number.")
             await input_el.press("Enter")
 
-            # Wait for response (up to 60s for slow agents)
             try:
                 await page.wait_for_selector(
                     '.msg-row.assistant',
                     timeout=60000,
                 )
             except Exception:
-                # Check if we at least see streaming
                 body = await page.content()
                 assert "streaming" in body.lower() or "spinner" in body.lower() or "waiting" in body.lower(), \
                     "No response and no streaming indicator visible"
                 return
 
-            # Verify assistant message appeared
             assistant_msgs = await page.locator('.msg-row.assistant').count()
             assert assistant_msgs >= 1, "No assistant response received"
             await browser.close()
@@ -253,37 +250,17 @@ class TestTeamChatFlow:
 # ---------------------------------------------------------------------------
 
 @skip_no_mcp
-class TestMCPTeamEndToEnd:
-    """Direct MCP tool tests — verify the backend is solid."""
+class TestMCPChatEndToEnd:
+    """Direct MCP chat tool tests — verify the backend is solid."""
 
     @pytest.mark.asyncio
-    async def test_team_chat_auto_routing(self):
-        """Auto-router should pick a free agent for simple questions."""
+    async def test_chat_qwen(self):
+        """Chat with qwen should route to LM Studio."""
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {
-                    "message": "What is 2+2? Reply with just the number.",
-                }},
-            })
-            assert resp.is_success
-            data = resp.json()
-            content = data["result"]["content"]
-            text = " ".join(b.get("text", "") for b in content)
-            assert "4" in text, f"Expected '4' in response, got: {text[:200]}"
-            # Should have used a free agent (qwen or gemini)
-            assert "qwen" in text.lower() or "gemini" in text.lower(), \
-                f"Expected free agent, got: {text[:200]}"
-
-    @pytest.mark.asyncio
-    async def test_team_chat_forced_qwen(self):
-        """Forcing qwen should route to LM Studio."""
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(f"{_MCP_URL}/mcp", json={
-                "jsonrpc": "2.0", "id": 1,
-                "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {
+                "params": {"name": "chat", "arguments": {
                     "message": "Say OK",
                     "agent": "qwen",
                 }},
@@ -294,40 +271,26 @@ class TestMCPTeamEndToEnd:
             assert "qwen" in text.lower(), f"Should route to qwen, got: {text[:200]}"
 
     @pytest.mark.asyncio
-    async def test_team_chat_empty_message_rejected(self):
+    async def test_chat_empty_message_rejected(self):
         """Empty message should return validation error, not crash."""
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {"message": ""}},
+                "params": {"name": "chat", "arguments": {"message": "", "agent": "qwen"}},
             })
             assert resp.is_success
             text = str(resp.json()["result"]["content"])
             assert "required" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_team_status_shows_agents(self):
-        """team_status should list available agents."""
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(f"{_MCP_URL}/mcp", json={
-                "jsonrpc": "2.0", "id": 1,
-                "method": "tools/call",
-                "params": {"name": "team_status", "arguments": {}},
-            })
-            assert resp.is_success
-            text = str(resp.json()["result"]["content"])
-            assert "Team of Experts" in text
-            assert "available" in text.lower()
-
-    @pytest.mark.asyncio
-    async def test_team_image_draft_mode(self):
-        """team_image draft mode should return quickly (Arc only)."""
+    async def test_image_pipeline_draft_mode(self):
+        """image_pipeline draft mode should return quickly (Arc only)."""
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
-                "params": {"name": "team_image", "arguments": {
+                "params": {"name": "image_pipeline", "arguments": {
                     "prompt": "a red circle on white background",
                     "mode": "draft",
                 }},
@@ -335,25 +298,7 @@ class TestMCPTeamEndToEnd:
             assert resp.is_success
             data = resp.json()
             content = data["result"]["content"]
-            # Should have at least a text block (header) and either image or error
             assert len(content) >= 1
-
-    @pytest.mark.asyncio
-    async def test_classifier_word_boundary(self):
-        """Classifier should not trigger code_review on 'improve'."""
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(f"{_MCP_URL}/mcp", json={
-                "jsonrpc": "2.0", "id": 1,
-                "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {
-                    "message": "improve this summary of quantum computing",
-                }},
-            })
-            assert resp.is_success
-            text = " ".join(b.get("text", "") for b in resp.json()["result"]["content"])
-            # Should NOT route to claude (code_review), should use a free agent
-            assert "qwen" in text.lower() or "gemini" in text.lower(), \
-                f"'improve' should not trigger code_review routing, got: {text[:200]}"
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +306,7 @@ class TestMCPTeamEndToEnd:
 # ---------------------------------------------------------------------------
 
 @skip_no_mcp
-class TestTeamErrorHandling:
+class TestChatErrorHandling:
     """Verify graceful error handling for edge cases."""
 
     @pytest.mark.asyncio
@@ -371,7 +316,7 @@ class TestTeamErrorHandling:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {
+                "params": {"name": "chat", "arguments": {
                     "message": "hello",
                     "agent": "nonexistent",
                 }},
@@ -387,12 +332,11 @@ class TestTeamErrorHandling:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
-                "params": {"name": "team_chat", "arguments": {
+                "params": {"name": "chat", "arguments": {
                     "message": "what is $(echo hello) and `date` and $HOME ?",
                     "agent": "qwen",
                 }},
             })
             assert resp.is_success
             data = resp.json()
-            # Should get a normal response, not a shell injection result
             assert data["result"].get("isError") is not True

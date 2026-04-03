@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copy SSH key for Team of Experts (must run as root to read the bind-mounted key)
+# Copy SSH key for CLI agent chat (must run as root to read the bind-mounted key)
 if [ -f /run/secrets/team_ssh_key ]; then
     cp /run/secrets/team_ssh_key /app/.ssh/team_key
     chown mcp:mcp /app/.ssh/team_key
