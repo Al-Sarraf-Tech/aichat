@@ -83,3 +83,42 @@ export function estimateHeight(text, maxWidth) {
   if (!prepared) return 0;
   return layout(prepared, maxWidth - BUBBLE_PADDING_H * 2, LINE_HEIGHT).height;
 }
+
+// ── Virtual Scroll Height Estimation ────────────────────────────
+const MSG_PADDING = 24;         // vertical gap between messages
+const CODE_BLOCK_HEADER = 44;   // code-block header height
+const EMPTY_MSG_HEIGHT = 60;
+
+/**
+ * Estimate the rendered height of a chat message without DOM measurement.
+ * Uses pretext for prose, line-counting heuristic for code blocks.
+ */
+export function estimateMessageHeight(msg, containerWidth) {
+  const content = msg.content || '';
+  if (!content.trim()) return EMPTY_MSG_HEIGHT;
+
+  const maxWidth = msg.role === 'user'
+    ? Math.min(containerWidth * 0.75, 600)
+    : Math.min(containerWidth * 0.85, 800);
+
+  // Separate code blocks from prose
+  const codeBlocks = content.match(/```[\s\S]*?```/g) || [];
+  const codeLines = codeBlocks.reduce((sum, b) => sum + b.split('\n').length, 0);
+  const prose = content.replace(/```[\s\S]*?```/g, '').trim();
+
+  // Prose height via pretext (fast, cached)
+  let proseH = 0;
+  if (prose) {
+    const prepared = getPrepared(prose);
+    if (prepared) {
+      proseH = layout(prepared, maxWidth - BUBBLE_PADDING_H * 2, LINE_HEIGHT).height;
+    } else {
+      proseH = prose.split('\n').length * LINE_HEIGHT;
+    }
+  }
+
+  // Code height via line count
+  const codeH = codeLines * LINE_HEIGHT + codeBlocks.length * CODE_BLOCK_HEADER;
+
+  return MSG_PADDING + proseH + codeH + (msg.role === 'assistant' ? 8 : 0);
+}

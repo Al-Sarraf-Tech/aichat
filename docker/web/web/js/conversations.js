@@ -121,7 +121,7 @@ export async function openConversation(id) {
 
 export async function deleteConv(id) {
   // Find conversation title for confirmation
-  const conv = state.conversations.find(c => c.id === id);
+  const conv = state.allConversations.find(c => c.id === id);
   const title = conv ? (conv.title || 'Untitled').substring(0, 50) : 'this conversation';
   // Styled confirmation dialog
   return new Promise((resolve) => {

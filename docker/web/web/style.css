@@ -909,6 +909,17 @@ html, body {
   flex-direction: column;
   gap: 24px;
 }
+#messages.virtual {
+  display: block;
+  position: relative;
+  contain: layout style;
+  gap: 0;
+}
+#messages.virtual .msg {
+  position: absolute;
+  width: 100%;
+  left: 0;
+}
 
 /* ── Messages ───────────────────────────────────────────────────── */
 .msg {

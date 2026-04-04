@@ -238,9 +238,8 @@ services:
       # All tools are free/local — no paid API keys required.
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
-      # CLI agent chat (OAuth) + image generation
+      # CLI agent chat (OAuth)
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       TEAM_SSH_HOST: "host.docker.internal"
       TEAM_SSH_PORT: "1337"
       TEAM_SSH_USER: "jalsarraf"
@@ -438,9 +437,6 @@ services:
       COMFYUI_URL: "${COMFYUI_URL:-http://aichat-comfyui:8388}"
       HF_TOKEN: "${HF_TOKEN:-}"
       VISION_GEN_URL: http://aichat-vision:8099/generate
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
       DB_PATH: /app/data/dartboard.db
       WEB_DIR: /app/web
     extra_hosts:

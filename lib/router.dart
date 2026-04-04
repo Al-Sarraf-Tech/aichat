@@ -373,38 +373,8 @@ class AppRouter {
     // ── Standalone API routing ──────────────────────────────────────
     // api:* models route directly to cloud providers (Anthropic/OpenAI/Google).
     if (effectiveModel.startsWith('api:')) {
-      final resolved = ApiClient.resolve(effectiveModel);
-      if (resolved == null) {
-        return _json({'error': 'Unknown API model: $effectiveModel'},
-            status: 400);
-      }
-      final (provider, realModel) = resolved;
-      final apiKey = switch (provider) {
-        ApiProvider.anthropic => config.anthropicApiKey,
-        ApiProvider.openai => config.openaiApiKey,
-        ApiProvider.google => config.googleApiKey,
-      };
-      if (apiKey.isEmpty) {
-        return _json({'error': 'API key not configured for provider'},
-            status: 400);
-      }
-
-      final controller = StreamController<List<int>>();
-      _runApiChat(id, provider, realModel, apiKey, controller)
-          .catchError((e) {
-        _log.severe('API chat error: $e');
-        _sseEvent(controller, 'error', {'message': '$e'});
-        if (!controller.isClosed) controller.close();
-      });
-      return Response.ok(
-        controller.stream,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          ..._corsHeaders,
-        },
-      );
+      return _json({'error': 'Cloud API models are disabled (no API keys configured)'},
+          status: 400);
     }
 
     // ── CLI/OAuth model routing ──────────────────────────────────────
@@ -989,10 +959,10 @@ class AppRouter {
     status['gemini'] = 'ok';
     status['qwen'] = 'ok';
 
-    // API providers — check if API keys are configured
-    status['anthropic'] = config.anthropicApiKey.isNotEmpty ? 'ok' : 'no_key';
-    status['openai'] = config.openaiApiKey.isNotEmpty ? 'ok' : 'no_key';
-    status['google'] = config.googleApiKey.isNotEmpty ? 'ok' : 'no_key';
+    // Cloud API providers — disabled (no keys configured)
+    status['anthropic'] = 'no_key';
+    status['openai'] = 'no_key';
+    status['google'] = 'no_key';
 
     // LM Studio — check if reachable
     try {
@@ -2545,83 +2515,13 @@ class AppRouter {
 
   Response _listProviders(Request request) {
     return _json({
-      'anthropic': config.anthropicApiKey.isNotEmpty,
-      'openai': config.openaiApiKey.isNotEmpty,
-      'google': config.googleApiKey.isNotEmpty,
+      'anthropic': false,
+      'openai': false,
+      'google': false,
     });
   }
 
   // ── Standalone API Chat ─────────────────────────────────────────
-
-  Future<void> _runApiChat(
-    String conversationId,
-    ApiProvider provider,
-    String model,
-    String apiKey,
-    StreamController<List<int>> controller,
-  ) async {
-    final messages = db.getMessages(conversationId);
-    final llmMessages = messages.map((m) => m.toLlmDict()).toList();
-
-    // Extract system prompt (first message if role=system)
-    String? systemPrompt;
-    if (llmMessages.isNotEmpty && llmMessages.first['role'] == 'system') {
-      systemPrompt = llmMessages.first['content'] as String;
-      llmMessages.removeAt(0);
-    }
-
-    final buffer = StringBuffer();
-    int totalPrompt = 0, totalCompletion = 0;
-    try {
-      await for (final event in apiClient.chatStream(
-        provider: provider,
-        apiKey: apiKey,
-        model: model,
-        messages: llmMessages,
-        systemPrompt: systemPrompt,
-        maxTokens: config.maxTokens,
-        temperature: config.temperature,
-      )) {
-        switch (event) {
-          case TokenEvent(:final text):
-            buffer.write(text);
-            _sseEvent(controller, 'token', {'text': text});
-          case ReasoningTokenEvent(:final text):
-            _sseEvent(controller, 'thinking', {'text': text});
-          case UsageEvent(:final promptTokens, :final completionTokens):
-            totalPrompt += promptTokens;
-            totalCompletion += completionTokens;
-          case ErrorEvent(:final message):
-            _sseEvent(controller, 'error', {'message': message});
-          case DoneEvent():
-            break;
-          case ToolCallsEvent():
-            break; // API models don't use MCP tools through this path
-        }
-      }
-    } catch (e) {
-      _sseEvent(controller, 'error', {'message': 'Stream error: $e'});
-    }
-
-    // Save assistant response with real token count if available
-    final responseText = buffer.toString();
-    if (responseText.isNotEmpty) {
-      final realTokens = totalPrompt + totalCompletion;
-      db.addMessage(
-        conversationId: conversationId,
-        role: 'assistant',
-        content: responseText,
-        tokenCount: realTokens > 0 ? realTokens : null,
-      );
-      db.updateTokenCount(conversationId);
-      if (realTokens > 0) {
-        _log.info('API chat tokens: prompt=$totalPrompt completion=$totalCompletion total=$realTokens model=$model');
-      }
-    }
-
-    _sseEvent(controller, 'done', {});
-    if (!controller.isClosed) controller.close();
-  }
 
   Response _json(Map<String, dynamic> data, {int status = 200}) {
     return Response(

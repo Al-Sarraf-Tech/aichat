@@ -925,17 +925,19 @@ class TestModelRegistry:
         client = self._mock_client([{"id": "llama-3", "type": "llm"}])
         reg = ModelRegistry.get()
         await reg.is_available(client)
+        initial_count = client.get.call_count  # _refresh probes /v1/models + /api/v0/models
         await reg.is_available(client)  # should hit cache
-        assert client.get.call_count == 1
+        assert client.get.call_count == initial_count  # no new calls
 
     @pytest.mark.asyncio
     async def test_invalidate_forces_fresh_probe(self):
         client = self._mock_client([{"id": "llama-3", "type": "llm"}])
         reg = ModelRegistry.get()
         await reg.is_available(client)
+        initial_count = client.get.call_count
         reg.invalidate()
         await reg.is_available(client)
-        assert client.get.call_count == 2
+        assert client.get.call_count == initial_count * 2  # doubled after invalidate + re-probe
 
     @pytest.mark.asyncio
     async def test_best_chat_model_returns_first_llm(self):

@@ -9,17 +9,35 @@ export function esc(t) {
   return d.innerHTML;
 }
 
+// ── Markdown Cache ──────────────────────────────────────────────
+const _mdCache = new Map();
+const MD_CACHE_MAX = 200;
+
 export function renderMd(t) {
   if (!t) return '';
+  const cached = _mdCache.get(t);
+  if (cached !== undefined) return cached;
   try {
     const html = typeof marked !== 'undefined' ? marked.parse(t) : t.replace(/</g, '&lt;').replace(/\n/g, '<br>');
-    return typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, { ADD_TAGS: ['img'], ADD_ATTR: ['src', 'alt', 'class', 'loading', 'decoding'] }) : html;
+    const safe = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(html, { ADD_TAGS: ['img'], ADD_ATTR: ['src', 'alt', 'class', 'loading', 'decoding'] }) : html;
+    if (_mdCache.size >= MD_CACHE_MAX) _mdCache.delete(_mdCache.keys().next().value);
+    _mdCache.set(t, safe);
+    return safe;
   } catch (e) { console.error('renderMd:', e); return esc(t); }
 }
 
-export function scrollToBottom() {
+export function clearMdCache() { _mdCache.clear(); }
+
+// ── RAF-batched scroll ──────────────────────────────────────────
+let _scrollPending = false;
+
+export function scrollToBottom(opts) {
   const v = document.getElementById('chat-view');
-  if (v) v.scrollTop = v.scrollHeight;
+  if (!v) return;
+  if (opts && opts.immediate) { v.scrollTop = v.scrollHeight; return; }
+  if (_scrollPending) return;
+  _scrollPending = true;
+  requestAnimationFrame(() => { _scrollPending = false; v.scrollTop = v.scrollHeight; });
 }
 
 export function formatCtx(n) {

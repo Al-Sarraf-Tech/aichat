@@ -6,11 +6,11 @@ import { openLightbox, buildImageCarousels } from './lightbox.js';
 import { loadConversations } from './conversations.js';
 import { toast } from './toasts.js';
 import { MODELS } from './models.js';
-import { tightenBubble } from './layout.js';
+import { tightenBubble, estimateMessageHeight } from './layout.js';
 
 export function postProcess(el) {
   if (!el) return;
-  try { if (typeof hljs !== 'undefined') el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b)); } catch {}
+  // Phase 1 (sync): structural wrapping — runs before paint to prevent layout shift
   el.querySelectorAll('pre').forEach(pre => {
     if (pre.closest('.code-block')) return;
     const w = document.createElement('div'); w.className = 'code-block';
@@ -24,16 +24,116 @@ export function postProcess(el) {
     h.appendChild(ls); h.appendChild(cb); w.insertBefore(h, pre);
   });
   buildImageCarousels(el);
+  // Phase 2 (async): syntax highlighting — deferred to idle time
+  const codeBlocks = Array.from(el.querySelectorAll('pre code'));
+  if (codeBlocks.length && typeof hljs !== 'undefined') {
+    const highlight = () => { try { codeBlocks.forEach(b => hljs.highlightElement(b)); } catch {} };
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(highlight, { timeout: 2000 });
+    } else {
+      requestAnimationFrame(highlight);
+    }
+  }
 }
+
+// ── Virtual Scroll State ────────────────────────────────────────
+const VBUFFER = 5; // render this many extra messages above/below viewport
+const VIRTUAL_THRESHOLD = 30; // only virtualize conversations with 30+ messages
+let _vs = null; // virtual scroll state (null = non-virtual mode)
 
 export function renderMessages(msgs) {
   const c = document.getElementById('messages'); c.textContent = '';
-  for (const m of msgs) {
-    if (m.role === 'system' || m.role === 'tool') continue;
-    if (m.role === 'assistant' && !(m.content||'').trim() && m.tool_calls && m.tool_calls.length > 0) continue;
-    appendMessage(m.role, m.content, m.tool_calls, null, m.id, m.created_at);
+  c.classList.remove('virtual');
+  _vs = null;
+
+  // Filter displayable messages
+  const visible = msgs.filter(m => {
+    if (m.role === 'system' || m.role === 'tool') return false;
+    if (m.role === 'assistant' && !(m.content||'').trim() && m.tool_calls && m.tool_calls.length > 0) return false;
+    return true;
+  });
+
+  // Small conversations: render all directly (fast path)
+  if (visible.length < VIRTUAL_THRESHOLD) {
+    for (const m of visible) appendMessage(m.role, m.content, m.tool_calls, null, m.id, m.created_at);
+    scrollToBottom({ immediate: true });
+    return;
   }
-  scrollToBottom();
+
+  // Large conversations: virtual scroll
+  const containerW = c.offsetWidth || 740;
+  const heights = visible.map(m => estimateMessageHeight(m, containerW));
+  const offsets = [];
+  let cumulative = 0;
+  for (const h of heights) { offsets.push(cumulative); cumulative += h; }
+
+  _vs = { msgs: visible, heights, offsets, totalHeight: cumulative, rendered: new Map(), container: c };
+
+  c.classList.add('virtual');
+  c.style.height = cumulative + 'px';
+
+  // Scroll to bottom, then render visible window
+  const scrollEl = document.getElementById('chat-view');
+  if (scrollEl) {
+    scrollEl.scrollTop = cumulative; // jump to bottom
+    _vsRenderWindow(scrollEl);
+    scrollEl.removeEventListener('scroll', _vsOnScroll);
+    scrollEl.addEventListener('scroll', _vsOnScroll, { passive: true });
+  }
+}
+
+function _vsOnScroll() {
+  if (!_vs) return;
+  const scrollEl = document.getElementById('chat-view');
+  if (scrollEl) requestAnimationFrame(() => _vsRenderWindow(scrollEl));
+}
+
+function _vsRenderWindow(scrollEl) {
+  if (!_vs) return;
+  const { msgs, heights, offsets, totalHeight, rendered, container } = _vs;
+  const viewTop = scrollEl.scrollTop;
+  const viewBottom = viewTop + scrollEl.clientHeight;
+
+  // Binary search for first visible message
+  let lo = 0, hi = msgs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (offsets[mid] + heights[mid] < viewTop) lo = mid + 1; else hi = mid;
+  }
+  const windowStart = Math.max(0, lo - VBUFFER);
+
+  // Find last visible message
+  let end = lo;
+  while (end < msgs.length && offsets[end] < viewBottom) end++;
+  const windowEnd = Math.min(msgs.length, end + VBUFFER);
+
+  // Remove out-of-range nodes
+  for (const [idx, node] of rendered) {
+    if (idx < windowStart || idx >= windowEnd) { node.remove(); rendered.delete(idx); }
+  }
+
+  // Add newly in-range nodes
+  for (let i = windowStart; i < windowEnd; i++) {
+    if (rendered.has(i)) continue;
+    const m = msgs[i];
+    const result = appendMessage(m.role, m.content, m.tool_calls, null, m.id, m.created_at);
+    if (result && result.div) {
+      result.div.style.position = 'absolute';
+      result.div.style.top = offsets[i] + 'px';
+      result.div.style.width = '100%';
+      result.div.style.left = '0';
+      rendered.set(i, result.div);
+      // Correct height estimate after real render
+      const realH = result.div.offsetHeight;
+      if (Math.abs(realH - heights[i]) > 4) {
+        const delta = realH - heights[i];
+        heights[i] = realH;
+        for (let j = i + 1; j < offsets.length; j++) offsets[j] += delta;
+        _vs.totalHeight += delta;
+        container.style.height = _vs.totalHeight + 'px';
+      }
+    }
+  }
 }
 
 export function appendMessage(role, content, toolCalls, files, msgId, timestamp) {
@@ -260,6 +360,8 @@ export async function send() {
   // Progressive markdown: throttle re-renders to avoid jank
   let mdRenderPending = false, lastMdRender = 0;
   const MD_RENDER_INTERVAL = 120; // ms between renders
+  // Incremental render: only re-parse the tail after safe cutpoints
+  let lastSafeOffset = 0, committedHtml = '';
 
   try {
     const payload = { content: text || 'Describe the attached file(s).', tools_enabled: state.toolsEnabled };
@@ -299,14 +401,26 @@ export async function send() {
           thinkingText += d.text || ''; const tb = thinkingCard.querySelector('.thinking-body'); if (tb) tb.textContent = thinkingText;
         } else if (ev === 'token') {
           fullContent += d.text || ''; tokenCount += (d.text||'').split(/\s+/).length;
-          // Progressive markdown rendering (throttled)
+          // Incremental markdown rendering: only re-parse the tail
           const now = Date.now();
           if (now - lastMdRender > MD_RENDER_INTERVAL) {
-            contentEl.innerHTML = renderMd(fullContent);
+            // Find safe cutpoint (last \n\n = complete markdown block)
+            const cutIdx = fullContent.lastIndexOf('\n\n', fullContent.length - 4);
+            if (cutIdx > lastSafeOffset) {
+              committedHtml = renderMd(fullContent.substring(0, cutIdx + 2));
+              lastSafeOffset = cutIdx + 2;
+            }
+            const tail = fullContent.substring(lastSafeOffset);
+            contentEl.innerHTML = committedHtml + (tail ? renderMd(tail) : '');
             lastMdRender = now; mdRenderPending = false;
           } else if (!mdRenderPending) {
             mdRenderPending = true;
-            setTimeout(() => { if (!isDone) { contentEl.innerHTML = renderMd(fullContent); lastMdRender = Date.now(); } mdRenderPending = false; }, MD_RENDER_INTERVAL);
+            setTimeout(() => { if (!isDone) {
+              const cutIdx = fullContent.lastIndexOf('\n\n', fullContent.length - 4);
+              if (cutIdx > lastSafeOffset) { committedHtml = renderMd(fullContent.substring(0, cutIdx + 2)); lastSafeOffset = cutIdx + 2; }
+              contentEl.innerHTML = committedHtml + renderMd(fullContent.substring(lastSafeOffset));
+              lastMdRender = Date.now();
+            } mdRenderPending = false; }, MD_RENDER_INTERVAL);
           }
           if (!statsEl && state.settings.showStreamStats) {
             statsEl = document.createElement('div'); statsEl.className = 'stream-stats'; bodyEl.insertBefore(statsEl, contentEl);
@@ -377,7 +491,7 @@ export async function send() {
   else if (!fullContent && !hasError && !contentEl.textContent.trim()) { contentEl.style.color='var(--text-muted)'; contentEl.style.fontStyle='italic'; contentEl.textContent='Model returned no response.'; }
   aDiv.classList.remove('streaming');
   document.querySelectorAll('.loading-spinner').forEach(el => el.remove());
-  postProcess(bodyEl); scrollToBottom();
+  postProcess(bodyEl); scrollToBottom({ immediate: true });
   state.isStreaming=false; state.sendLock=false; state.abortController=null; emit('input:changed');
   await loadConversations();
 }
