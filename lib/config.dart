@@ -28,6 +28,14 @@ class Config {
   /// Vision service /generate URL for Arc A380 local image gen. Empty = disabled.
   final String visionGenUrl;
 
+  /// HuggingFace Inference API token. Used as fallback when ComfyUI is down.
+  final String hfToken;
+
+  /// API keys for standalone cloud model access. Empty = provider disabled.
+  final String anthropicApiKey;
+  final String openaiApiKey;
+  final String googleApiKey;
+
   Config({
     required this.lmStudioUrl,
     required this.lmStudioFallbackUrl,
@@ -47,6 +55,10 @@ class Config {
     required this.toolRouterUrl,
     required this.comfyuiUrl,
     required this.visionGenUrl,
+    required this.hfToken,
+    required this.anthropicApiKey,
+    required this.openaiApiKey,
+    required this.googleApiKey,
   });
 
   factory Config.fromEnv() {
@@ -75,6 +87,10 @@ class Config {
       toolRouterUrl: env['TOOL_ROUTER_URL'] ?? '',
       comfyuiUrl: env['COMFYUI_URL'] ?? '',
       visionGenUrl: env['VISION_GEN_URL'] ?? '',
+      hfToken: env['HF_TOKEN'] ?? '',
+      anthropicApiKey: env['ANTHROPIC_API_KEY'] ?? '',
+      openaiApiKey: env['OPENAI_API_KEY'] ?? '',
+      googleApiKey: env['GOOGLE_API_KEY'] ?? '',
     );
   }
 }

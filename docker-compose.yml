@@ -217,7 +217,7 @@ services:
       IMAGE_GEN_BASE_URL: ${IMAGE_GEN_BASE_URL:-http://192.168.50.2:1234}
       IMAGE_GEN_MODEL:  "${IMAGE_GEN_MODEL:-}"
       # ComfyUI — dedicated diffusion server on WSL2 RTX 3090 (preferred for image gen)
-      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8388}"
+      COMFYUI_URL: "${COMFYUI_URL:-http://aichat-comfyui:8388}"
       EMBED_MODEL: "${EMBED_MODEL:-}"
       # GPU idle TTL — auto-unload models after idle period (seconds, 0=disable)
       GPU_IDLE_TTL: "${GPU_IDLE_TTL:-600}"
@@ -432,10 +432,11 @@ services:
     environment:
       PORT: "8200"
       MCP_URL: http://aichat-mcp:8096
-      TOOL_ROUTER_URL: http://192.168.50.2:1235
+      TOOL_ROUTER_URL: http://host.docker.internal:1235
       LM_STUDIO_URL: http://192.168.50.2:1234
       LM_STUDIO_FALLBACK_URL: http://100.78.39.76:1234
-      COMFYUI_URL: "${COMFYUI_URL:-http://192.168.50.2:8388}"
+      COMFYUI_URL: "${COMFYUI_URL:-http://aichat-comfyui:8388}"
+      HF_TOKEN: "${HF_TOKEN:-}"
       VISION_GEN_URL: http://aichat-vision:8099/generate
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
@@ -482,9 +483,56 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # aichat-comfyui: ComfyUI image generation server (NVIDIA GPU required)
+  #   RTX 3090 on dominus. Runs with --listen to accept remote connections.
+  #   Models live in the comfyui-models volume, populated by model-downloader.
+  # ---------------------------------------------------------------------------
+  aichat-comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    environment:
+      CLI_ARGS: "--listen 0.0.0.0 --port 8388"
+    volumes:
+      - comfyui-models:/opt/ComfyUI/models
+      - comfyui-output:/opt/ComfyUI/output
+      - comfyui-input:/opt/ComfyUI/input
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8388/system_stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    profiles:
+      - gpu
+
+  # ---------------------------------------------------------------------------
+  # model-downloader: One-shot service to download ComfyUI models from HF
+  #   Usage: docker compose --profile models run --rm model-downloader
+  #   Idempotent — skips files that already exist.
+  # ---------------------------------------------------------------------------
+  model-downloader:
+    build: ./docker/comfyui
+    environment:
+      HF_TOKEN: "${HF_TOKEN:-}"
+      COMFYUI_MODELS_DIR: /models
+    volumes:
+      - comfyui-models:/models
+    profiles:
+      - models
+
 volumes:
   aichatdb:       # PostgreSQL data
   datadb:         # aichat-data: legacy SQLite (migrated to PostgreSQL; safe to remove after confirmed migration)
   qdrantdb:       # Qdrant vector storage
   whatsappauth:   # WhatsApp session credentials
   miniodata:      # MinIO object storage
+  comfyui-models: # ComfyUI model weights (checkpoints, unets, clip, vae)
+  comfyui-output: # ComfyUI generated images
+  comfyui-input:  # ComfyUI uploaded reference images

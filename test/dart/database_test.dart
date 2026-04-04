@@ -35,6 +35,24 @@ void main() {
       expect(fetched!.title, equals('Test'));
     });
 
+    test('isDeveloperMode create and update', () {
+      final c1 = db.createConversation(title: 'Dev', isDeveloperMode: true);
+      expect(c1.isDeveloperMode, isTrue);
+
+      final f1 = db.getConversation(c1.id);
+      expect(f1!.isDeveloperMode, isTrue);
+
+      db.updateConversation(c1.id, isDeveloperMode: false);
+      final f2 = db.getConversation(c1.id);
+      expect(f2!.isDeveloperMode, isFalse);
+
+      final c2 = db.createConversation(title: 'User', isDeveloperMode: false);
+      expect(c2.isDeveloperMode, isFalse);
+
+      final f3 = db.getConversation(c2.id);
+      expect(f3!.isDeveloperMode, isFalse);
+    });
+
     test('list ordered by updated_at desc', () {
       db.createConversation(title: 'First');
       db.createConversation(title: 'Second');

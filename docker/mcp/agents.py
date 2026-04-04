@@ -639,55 +639,93 @@ async def run_comfyui(prompt: str, *, negative_prompt: str = "",
     if not COMFYUI_URL:
         return ImageResult(backend="comfyui", error="COMFYUI_URL not configured")
 
-    model_map = {
-        "flux_dev": "flux1-dev.safetensors",
-        "flux_schnell": "flux1-schnell.safetensors",
-        "sdxl_lightning": "sdxl_lightning_4step.safetensors",
-        "sdxl_turbo": "sdxl_turbo.safetensors",
+    # Model configurations matching the Dart router's _buildComfyWorkflow
+    model_configs = {
+        "flux_dev":         {"unet": "flux1-dev.safetensors",     "steps": 25, "cfg": 1.0, "type": "flux"},
+        "flux_schnell":     {"unet": "flux1-schnell.safetensors", "steps": 4,  "cfg": 1.0, "type": "flux"},
+        "sdxl_lightning":   {"ckpt": "sd_xl_base_1.0.safetensors", "unet": "sdxl_lightning_4step.safetensors",
+                             "steps": 4, "cfg": 1.5, "type": "sdxl_lightning"},
+        "sdxl_turbo":       {"ckpt": "sdxl_turbo.safetensors",    "steps": 1,  "cfg": 1.0, "type": "sdxl_turbo"},
+        "dreamshaper":      {"ckpt": "dreamshaper_8.safetensors",       "steps": 25, "cfg": 7.0, "type": "sd15"},
+        "realistic_vision": {"ckpt": "realistic_vision_v5.safetensors", "steps": 30, "cfg": 7.0, "type": "sd15"},
+        "deliberate":       {"ckpt": "deliberate_v3.safetensors",       "steps": 25, "cfg": 7.0, "type": "sd15"},
     }
-    checkpoint = model_map.get(model, model)
+    cfg = model_configs.get(model, model_configs["flux_dev"])
+    eff_steps = steps if steps != 25 else cfg["steps"]
+    eff_cfg = cfg_scale if cfg_scale != 3.5 else cfg["cfg"]
+    model_type = cfg["type"]
+    rng_seed = int(time.time()) % (2**32)
 
-    workflow = {
-        "3": {
-            "class_type": "KSampler",
-            "inputs": {
-                "seed": int(time.time()) % (2**32),
-                "steps": steps,
-                "cfg": cfg_scale,
-                "sampler_name": "euler",
-                "scheduler": "normal",
-                "denoise": 1.0,
-                "model": ["4", 0],
-                "positive": ["6", 0],
-                "negative": ["7", 0],
-                "latent_image": ["5", 0],
-            },
-        },
-        "4": {
-            "class_type": "CheckpointLoaderSimple",
-            "inputs": {"ckpt_name": checkpoint},
-        },
-        "5": {
-            "class_type": "EmptyLatentImage",
-            "inputs": {"width": width, "height": height, "batch_size": 1},
-        },
-        "6": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"text": prompt, "clip": ["4", 1]},
-        },
-        "7": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"text": negative_prompt or "", "clip": ["4", 1]},
-        },
-        "8": {
-            "class_type": "VAEDecode",
-            "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
-        },
-        "9": {
-            "class_type": "SaveImage",
-            "inputs": {"filename_prefix": "aichat_", "images": ["8", 0]},
-        },
-    }
+    if model_type == "flux":
+        # FLUX: UNETLoader + DualCLIPLoader + VAELoader + EmptySD3LatentImage
+        workflow = {
+            "3": {"class_type": "KSampler", "inputs": {
+                "seed": rng_seed, "steps": eff_steps, "cfg": eff_cfg,
+                "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0,
+                "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
+                "latent_image": ["5", 0]}},
+            "4": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "default"}},
+            "5": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["11", 0]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": ["11", 0]}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["10", 0]}},
+            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+            "10": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "11": {"class_type": "DualCLIPLoader", "inputs": {
+                "clip_name1": "clip_l.safetensors", "clip_name2": "t5xxl_fp16.safetensors", "type": "flux"}},
+        }
+    elif model_type == "sdxl_lightning":
+        # SDXL Lightning: CheckpointLoader + UNETLoader → ModelMergeSimple
+        workflow = {
+            "3": {"class_type": "KSampler", "inputs": {
+                "seed": rng_seed, "steps": eff_steps, "cfg": eff_cfg,
+                "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0,
+                "model": ["4c", 0], "positive": ["6", 0], "negative": ["7", 0],
+                "latent_image": ["5", 0]}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": cfg["ckpt"]}},
+            "4b": {"class_type": "UNETLoader", "inputs": {"unet_name": cfg["unet"], "weight_dtype": "default"}},
+            "4c": {"class_type": "ModelMergeSimple", "inputs": {"model1": ["4", 0], "model2": ["4b", 0], "ratio": 1.0}},
+            "5": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": ["4", 1]}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+        }
+    elif model_type == "sd15":
+        # SD 1.5 community models — native 512x512, up to 768x768
+        eff_w = 512 if width > 768 else width
+        eff_h = 512 if height > 768 else height
+        workflow = {
+            "3": {"class_type": "KSampler", "inputs": {
+                "seed": rng_seed, "steps": eff_steps, "cfg": eff_cfg,
+                "sampler_name": "euler_ancestral", "scheduler": "normal", "denoise": 1.0,
+                "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
+                "latent_image": ["5", 0]}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": cfg["ckpt"]}},
+            "5": {"class_type": "EmptyLatentImage", "inputs": {"width": eff_w, "height": eff_h, "batch_size": 1}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": ["4", 1]}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+        }
+    else:
+        # SDXL Turbo and other checkpoint-based models
+        eff_w = 512 if model_type == "sdxl_turbo" and width > 512 else width
+        eff_h = 512 if model_type == "sdxl_turbo" and height > 512 else height
+        workflow = {
+            "3": {"class_type": "KSampler", "inputs": {
+                "seed": rng_seed, "steps": eff_steps, "cfg": eff_cfg,
+                "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0,
+                "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
+                "latent_image": ["5", 0]}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": cfg["ckpt"]}},
+            "5": {"class_type": "EmptyLatentImage", "inputs": {"width": eff_w, "height": eff_h, "batch_size": 1}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": negative_prompt or "", "clip": ["4", 1]}},
+            "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+            "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": f"aichat_{model}", "images": ["8", 0]}},
+        }
+    checkpoint = cfg.get("unet", cfg.get("ckpt", model))
 
     start = time.monotonic()
     try:
@@ -1012,26 +1050,15 @@ async def image_pipeline(
     # ── Step 4: Final Render ─────────────────────────────────────────
     render_tasks: list[tuple[str, Any]] = []
 
-    if backend != "auto" and backend != "all":
-        if backend == "gemini":
-            render_tasks.append(("gemini", run_gemini_image(art_prompt)))
-        elif backend == "openai" and OPENAI_API_KEY:
-            render_tasks.append(("openai", run_openai_image(art_prompt, size=f"{base_w}x{base_h}")))
-        elif backend == "comfyui":
-            render_tasks.append(("comfyui", run_comfyui(
-                art_prompt, negative_prompt=neg_prompt, model=gen_model,
-                width=base_w, height=base_h, steps=gen_steps, cfg_scale=gen_cfg)))
-        elif backend == "arc":
-            render_tasks.append(("arc", run_arc_draft(art_prompt, negative_prompt=neg_prompt,
-                                                       width=min(base_w, 512), height=min(base_h, 512))))
+    # ComfyUI is the sole render backend (cloud backends removed)
+    if backend == "arc":
+        render_tasks.append(("arc", run_arc_draft(art_prompt, negative_prompt=neg_prompt,
+                                                   width=min(base_w, 512), height=min(base_h, 512))))
     else:
         if COMFYUI_URL:
             render_tasks.append(("comfyui", run_comfyui(
                 art_prompt, negative_prompt=neg_prompt, model=gen_model,
                 width=base_w, height=base_h, steps=gen_steps, cfg_scale=gen_cfg)))
-        render_tasks.append(("gemini", run_gemini_image(art_prompt)))
-        if OPENAI_API_KEY:
-            render_tasks.append(("openai", run_openai_image(art_prompt, size=f"{base_w}x{base_h}")))
         render_tasks.append(("arc", run_arc_draft(art_prompt, negative_prompt=neg_prompt)))
 
     raw_results = await asyncio.gather(

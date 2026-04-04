@@ -1171,27 +1171,90 @@ class AppRouter {
   // Jobs are stored in memory. Each job has a status and result.
   final Map<String, Map<String, dynamic>> _imageJobs = {};
 
+  /// Map frontend model names → HuggingFace Inference API model IDs.
+  /// Only models verified to work on the free HF inference tier.
+  static const _hfModelMap = <String, String>{
+    'flux_schnell': 'black-forest-labs/FLUX.1-schnell',
+    'flux_dev': 'black-forest-labs/FLUX.1-schnell',           // dev is paid-only, use schnell
+    'sdxl_lightning': 'stabilityai/stable-diffusion-xl-base-1.0',
+    'sdxl_turbo': 'stabilityai/stable-diffusion-xl-base-1.0', // turbo not on HF inference
+    'dreamshaper': 'black-forest-labs/FLUX.1-schnell',
+    'realistic_vision': 'stabilityai/stable-diffusion-xl-base-1.0',
+    'deliberate': 'black-forest-labs/FLUX.1-schnell',
+    'juggernaut_xl': 'stabilityai/stable-diffusion-xl-base-1.0',
+    'animagine_xl': 'black-forest-labs/FLUX.1-schnell',
+    'realvisxl': 'stabilityai/stable-diffusion-xl-base-1.0',
+  };
+
   Future<Response> _imageStatus(Request request) async {
-    if (config.comfyuiUrl.isEmpty) {
-      return _json({'ok': false, 'error': 'ComfyUI not configured'});
-    }
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
-    try {
-      final req = await client.getUrl(Uri.parse('${config.comfyuiUrl}/system_stats'));
-      final resp = await req.close().timeout(const Duration(seconds: 5));
-      if (resp.statusCode == 200) {
-        final body = await resp.transform(utf8.decoder).join();
-        final data = jsonDecode(body);
-        final devices = (data is Map ? data['devices'] as List? : null) ?? [];
-        final gpu = devices.isNotEmpty ? (devices[0]['name'] ?? 'GPU') as String : '';
-        return _json({'ok': true, 'gpu': gpu});
+    // Try ComfyUI first
+    if (config.comfyuiUrl.isNotEmpty) {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+      try {
+        final req = await client.getUrl(Uri.parse('${config.comfyuiUrl}/system_stats'));
+        final resp = await req.close().timeout(const Duration(seconds: 5));
+        if (resp.statusCode == 200) {
+          final body = await resp.transform(utf8.decoder).join();
+          final data = jsonDecode(body);
+          final devices = (data is Map ? data['devices'] as List? : null) ?? [];
+          final gpu = devices.isNotEmpty ? (devices[0]['name'] ?? 'GPU') as String : '';
+          // Check if ComfyUI actually has models installed
+          bool hasModels = false;
+          try {
+            final ckptReq = await client.getUrl(Uri.parse('${config.comfyuiUrl}/object_info/CheckpointLoaderSimple'));
+            final ckptResp = await ckptReq.close().timeout(const Duration(seconds: 5));
+            if (ckptResp.statusCode == 200) {
+              final ckptBody = await ckptResp.transform(utf8.decoder).join();
+              final ckptData = jsonDecode(ckptBody) as Map<String, dynamic>?;
+              final node = ckptData?['CheckpointLoaderSimple'] as Map?;
+              final inp = (node?['input'] as Map?)?['required'] as Map?;
+              final ckptList = inp?['ckpt_name'];
+              if (ckptList is List && ckptList.isNotEmpty && ckptList.first is List && (ckptList.first as List).isNotEmpty) {
+                hasModels = true;
+              }
+            }
+            if (!hasModels) {
+              final unetReq = await client.getUrl(Uri.parse('${config.comfyuiUrl}/object_info/UNETLoader'));
+              final unetResp = await unetReq.close().timeout(const Duration(seconds: 5));
+              if (unetResp.statusCode == 200) {
+                final unetBody = await unetResp.transform(utf8.decoder).join();
+                final unetData = jsonDecode(unetBody) as Map<String, dynamic>?;
+                final node = unetData?['UNETLoader'] as Map?;
+                final inp = (node?['input'] as Map?)?['required'] as Map?;
+                final unetList = inp?['unet_name'];
+                if (unetList is List && unetList.isNotEmpty && unetList.first is List && (unetList.first as List).isNotEmpty) {
+                  hasModels = true;
+                }
+              }
+            }
+          } catch (_) {
+            // Model check failed — treat as no models
+          }
+          if (hasModels) {
+            return _json({'ok': true, 'gpu': gpu, 'backend': 'comfyui'});
+          }
+          // ComfyUI reachable but no models — fall through to HF with GPU info
+          _log.info('ComfyUI reachable ($gpu) but has no models installed');
+          if (config.hfToken.isNotEmpty) {
+            return _json({
+              'ok': true,
+              'gpu': 'HuggingFace API \u2014 GPU: $gpu (no models)',
+              'backend': 'huggingface',
+            });
+          }
+          return _json({'ok': false, 'error': 'ComfyUI ($gpu) has no models installed'});
+        }
+      } catch (_) {
+        // ComfyUI unreachable — fall through to HF check
+      } finally {
+        client.close();
       }
-      return _json({'ok': false, 'error': 'ComfyUI returned ${resp.statusCode}'});
-    } catch (e) {
-      return _json({'ok': false, 'error': 'ComfyUI unreachable: $e'});
-    } finally {
-      client.close();
     }
+    // Fallback: HuggingFace Inference API
+    if (config.hfToken.isNotEmpty) {
+      return _json({'ok': true, 'gpu': 'HuggingFace Inference API', 'backend': 'huggingface'});
+    }
+    return _json({'ok': false, 'error': config.comfyuiUrl.isEmpty ? 'No image backend configured' : 'ComfyUI unreachable'});
   }
 
   /// Query ComfyUI for installed model files — used by frontend to enable/disable buttons.
@@ -1238,9 +1301,6 @@ class AppRouter {
   }
 
   Future<Response> _imageGenerate(Request request) async {
-    if (config.comfyuiUrl.isEmpty) {
-      return _json({'error': 'ComfyUI not configured'}, status: 503);
-    }
     final body = await _readJson(request);
     if (body == null) return _json({'error': 'Invalid JSON'}, status: 400);
     final prompt = (body['prompt'] as String?)?.trim() ?? '';
@@ -1256,8 +1316,7 @@ class AppRouter {
     final referenceImage = body['reference_image'] as String?; // base64 data URI
     final denoise = ((body['denoise'] as num?)?.toDouble() ?? 0.65).clamp(0.05, 1.0);
     final upscaleTo = body['upscale_to'] != null ? _toInt(body['upscale_to'], 2048).clamp(1024, 4096) : null;
-    // Backend routing: comfyui (default), openai, gemini
-    final backend = (body['backend'] as String?) ?? 'comfyui';
+    // ComfyUI is the sole image generation backend (cloud backends removed)
     // Batch count
     final count = _toInt(body['count'], 1).clamp(1, 4);
     // Inpainting mask
@@ -1277,24 +1336,19 @@ class AppRouter {
       'prompt': prompt,
       'user_id': userId,
     };
-    _log.info('Image job $jobId: backend=$backend model=$model ${width}x$height count=$count${referenceImage != null ? " img2img" : ""}${mask != null ? " inpaint" : ""}${upscaleTo != null ? " upscale→$upscaleTo" : ""}');
+    _log.info('Image job $jobId: model=$model ${width}x$height count=$count${referenceImage != null ? " img2img" : ""}${mask != null ? " inpaint" : ""}${upscaleTo != null ? " upscale→$upscaleTo" : ""}');
 
-    // Route to appropriate backend
-    if (backend == 'openai' || backend == 'gemini') {
-      // Cloud backends — standalone MCP tools (direct API)
-      _runApiImageJob(jobId, backend: backend, prompt: prompt, negPrompt: negPrompt,
-          width: width, height: height, count: count, upscaleTo: upscaleTo);
-    } else {
-      // ComfyUI backend — local generation
-      for (var i = 0; i < count; i++) {
-        final batchSeed = effectiveSeed + i;
-        _runImageJob('${jobId}_$i' == '${jobId}_0' ? jobId : '${jobId}_$i',
-            model: model, prompt: prompt, negPrompt: negPrompt,
-            width: width, height: height, steps: steps, seed: batchSeed,
-            referenceImage: referenceImage, denoise: denoise, upscaleTo: upscaleTo,
-            mask: mask, controlnetType: controlnetType, controlnetImage: controlnetImage,
-            controlnetStrength: controlnetStrength);
-      }
+    // Require at least one image backend (ComfyUI or HuggingFace)
+    if (config.comfyuiUrl.isEmpty && config.hfToken.isEmpty) {
+      return _json({'error': 'No image backend configured (set COMFYUI_URL or HF_TOKEN)'}, status: 503);
+    }
+    {
+      _runBatchImageJob(jobId, count: count,
+          model: model, prompt: prompt, negPrompt: negPrompt,
+          width: width, height: height, steps: steps, baseSeed: effectiveSeed,
+          referenceImage: referenceImage, denoise: denoise, upscaleTo: upscaleTo,
+          mask: mask, controlnetType: controlnetType, controlnetImage: controlnetImage,
+          controlnetStrength: controlnetStrength);
     }
 
     // Return instantly — client polls /api/image/job/<jobId>
@@ -1309,6 +1363,104 @@ class AppRouter {
       'error': error,
       if (existing != null && existing['user_id'] != null) 'user_id': existing['user_id'],
     };
+  }
+
+  /// Batch wrapper: runs [count] sequential jobs and aggregates all
+  /// images into the parent job. Each iteration uses baseSeed + i.
+  /// Auto-detects backend: tries ComfyUI first, falls back to HuggingFace.
+  Future<void> _runBatchImageJob(String jobId, {
+    required int count,
+    required String model, required String prompt, required String negPrompt,
+    required int width, required int height, int? steps, required int baseSeed,
+    String? referenceImage, double denoise = 1.0, int? upscaleTo,
+    String? mask, String? controlnetType, String? controlnetImage,
+    double controlnetStrength = 0.8,
+  }) async {
+    // Determine backend: try ComfyUI health check, fall back to HF
+    bool useHf = config.comfyuiUrl.isEmpty;
+    if (!useHf) {
+      final probe = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+      try {
+        final req = await probe.getUrl(Uri.parse('${config.comfyuiUrl}/system_stats'));
+        final resp = await req.close().timeout(const Duration(seconds: 3));
+        if (resp.statusCode != 200) useHf = true;
+      } catch (_) {
+        useHf = true;
+      } finally {
+        probe.close();
+      }
+    }
+    if (useHf && config.hfToken.isEmpty) {
+      _failJob(jobId, 'ComfyUI unreachable and no HF_TOKEN configured');
+      return;
+    }
+    // HF only supports text-to-image (no img2img, inpaint, or ControlNet)
+    if (useHf && (referenceImage != null || mask != null || controlnetImage != null)) {
+      _failJob(jobId, 'Img2img, inpainting, and ControlNet require ComfyUI (currently unreachable)');
+      return;
+    }
+    if (useHf) {
+      _log.info('Job $jobId: ComfyUI unavailable, using HuggingFace Inference API');
+    }
+
+    final allImages = <Map<String, dynamic>>[];
+    final userId = _imageJobs[jobId]?['user_id'];
+    for (var i = 0; i < count; i++) {
+      final childId = '${jobId}__batch_$i';
+      _imageJobs[childId] = {'status': 'submitted', 'user_id': userId};
+      if (useHf) {
+        await _runHfImageJob(childId,
+            model: model, prompt: prompt, negPrompt: negPrompt,
+            width: width, height: height, steps: steps, seed: baseSeed + i);
+      } else {
+        await _runImageJob(childId,
+            model: model, prompt: prompt, negPrompt: negPrompt,
+            width: width, height: height, steps: steps, seed: baseSeed + i,
+            referenceImage: referenceImage, denoise: denoise, upscaleTo: upscaleTo,
+            mask: mask, controlnetType: controlnetType, controlnetImage: controlnetImage,
+            controlnetStrength: controlnetStrength);
+      }
+      final child = _imageJobs[childId];
+      if (child != null && child['status'] == 'done') {
+        final imgs = child['images'];
+        if (imgs is List) allImages.addAll(imgs.cast<Map<String, dynamic>>());
+      } else {
+        _log.warning('Batch child $childId failed: ${child?['error'] ?? child?['status'] ?? 'unknown'}');
+      }
+      _imageJobs.remove(childId);
+    }
+    // If ComfyUI batch failed and HF is available, retry with HF
+    if (allImages.isEmpty && !useHf && config.hfToken.isNotEmpty &&
+        referenceImage == null && mask == null && controlnetImage == null) {
+      _log.info('Job $jobId: ComfyUI batch failed, retrying with HuggingFace');
+      for (var i = 0; i < count; i++) {
+        final childId = '${jobId}__hf_$i';
+        _imageJobs[childId] = {'status': 'submitted', 'user_id': userId};
+        await _runHfImageJob(childId,
+            model: model, prompt: prompt, negPrompt: negPrompt,
+            width: width, height: height, steps: steps, seed: baseSeed + i);
+        final child = _imageJobs[childId];
+        if (child != null && child['status'] == 'done') {
+          final imgs = child['images'];
+          if (imgs is List) allImages.addAll(imgs.cast<Map<String, dynamic>>());
+        } else {
+          _log.warning('HF child $childId failed: ${child?['error'] ?? 'unknown'}');
+        }
+        _imageJobs.remove(childId);
+      }
+    }
+    if (allImages.isEmpty) {
+      _failJob(jobId, 'All batch items failed');
+    } else {
+      _imageJobs[jobId] = {
+        'status': 'done',
+        'images': allImages,
+        'model': model,
+        'seed': baseSeed,
+        if (userId != null) 'user_id': userId,
+      };
+      _log.info('Batch job $jobId: complete, ${allImages.length} images from $count runs');
+    }
   }
 
   /// Background image generation — updates _imageJobs[jobId] when done.
@@ -1394,7 +1546,8 @@ class AppRouter {
       final submitResp = await submitReq.close().timeout(const Duration(seconds: 30));
       final submitBody = await submitResp.transform(utf8.decoder).join();
       if (submitResp.statusCode != 200) {
-        _failJob(jobId, 'ComfyUI rejected workflow');
+        _log.warning('Job $jobId: ComfyUI rejected workflow (${submitResp.statusCode}): $submitBody');
+        _failJob(jobId, 'ComfyUI rejected workflow: $submitBody');
         return;
       }
       final submitData = jsonDecode(submitBody);
@@ -1458,18 +1611,18 @@ class AppRouter {
         await imgResp.forEach(builder.add);
         final imgBytes = builder.takeBytes();
         if (imgBytes.length > 50 * 1024 * 1024) continue;
-        // Save to /app/pictures
+        // Save to /app/pictures/{userId}/ for ownership scoping
         String? savedAs;
         try {
-          final picDir = Directory('/app/pictures');
-          if (picDir.existsSync()) {
-            final ts = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:\-T]'), '').substring(0, 15);
-            final safePrompt = prompt.length > 30 ? prompt.substring(0, 30) : prompt;
-            final cleanPrompt = safePrompt.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
-            savedAs = '${model}_${ts}_$cleanPrompt.jpg';
-            File('${picDir.path}/$savedAs').writeAsBytesSync(imgBytes);
-            _log.info('Job $jobId: saved /app/pictures/$savedAs');
-          }
+          final jobUserId = _imageJobs[jobId]?['user_id'] as String? ?? 'shared';
+          final picDir = Directory('/app/pictures/$jobUserId');
+          if (!picDir.existsSync()) picDir.createSync(recursive: true);
+          final ts = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:\-T]'), '').substring(0, 15);
+          final safePrompt = prompt.length > 30 ? prompt.substring(0, 30) : prompt;
+          final cleanPrompt = safePrompt.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
+          savedAs = '${model}_${ts}_$cleanPrompt.jpg';
+          File('${picDir.path}/$savedAs').writeAsBytesSync(imgBytes);
+          _log.info('Job $jobId: saved /app/pictures/$jobUserId/$savedAs');
         } catch (e) {
           _log.warning('Job $jobId: save failed: $e');
         }
@@ -1514,6 +1667,93 @@ class AppRouter {
     }
   }
 
+  /// HuggingFace Inference API image generation — fallback when ComfyUI is down.
+  Future<void> _runHfImageJob(String jobId, {
+    required String model, required String prompt, required String negPrompt,
+    required int width, required int height, int? steps, required int seed,
+  }) async {
+    _imageJobs[jobId]!['status'] = 'generating';
+    final hfModel = _hfModelMap[model] ?? 'black-forest-labs/FLUX.1-schnell';
+    final url = Uri.parse('https://router.huggingface.co/hf-inference/models/$hfModel');
+    final client = HttpClient();
+    try {
+      // Build HF Inference API payload
+      final params = <String, dynamic>{
+        'width': width.clamp(256, 1024),
+        'height': height.clamp(256, 1024),
+        'seed': seed,
+      };
+      if (negPrompt.isNotEmpty) params['negative_prompt'] = negPrompt;
+      if (steps != null && steps > 0) params['num_inference_steps'] = steps;
+
+      // Retry loop for cold model loading (HF returns 503 while loading)
+      Uint8List? imgBytes;
+      for (var attempt = 0; attempt < 5; attempt++) {
+        final req = await client.postUrl(url);
+        req.headers.set('Authorization', 'Bearer ${config.hfToken}');
+        req.headers.contentType = ContentType.json;
+        req.write(jsonEncode({'inputs': prompt, 'parameters': params}));
+        final resp = await req.close().timeout(const Duration(seconds: 120));
+
+        if (resp.statusCode == 200) {
+          final builder = BytesBuilder(copy: false);
+          await resp.forEach(builder.add);
+          imgBytes = builder.takeBytes();
+          break;
+        }
+        if (resp.statusCode == 503) {
+          // Model is loading — parse estimated_time and wait
+          final body = await resp.transform(utf8.decoder).join();
+          _log.info('Job $jobId: HF model loading (attempt ${attempt + 1}/5): $body');
+          _imageJobs[jobId]!['status'] = 'loading model';
+          int wait = 20;
+          try {
+            final data = jsonDecode(body);
+            if (data is Map && data['estimated_time'] is num) {
+              wait = (data['estimated_time'] as num).ceil().clamp(5, 60);
+            }
+          } catch (_) {}
+          await Future.delayed(Duration(seconds: wait));
+          continue;
+        }
+        // Other errors — fail immediately
+        final errBody = await resp.transform(utf8.decoder).join();
+        _failJob(jobId, 'HuggingFace API error ${resp.statusCode}: $errBody');
+        return;
+      }
+      if (imgBytes == null || imgBytes.isEmpty) {
+        _failJob(jobId, 'HuggingFace API: model failed to load after 5 attempts');
+        return;
+      }
+
+      // Save image to disk
+      final userId = _imageJobs[jobId]?['user_id'] as String? ?? 'shared';
+      final picDir = Directory('/app/pictures/$userId');
+      if (!picDir.existsSync()) picDir.createSync(recursive: true);
+      final ts = DateTime.now().toIso8601String()
+          .replaceAll(RegExp(r'[:\-T]'), '').substring(0, 15);
+      final safePrompt = prompt.length > 30 ? prompt.substring(0, 30) : prompt;
+      final cleanPrompt = safePrompt
+          .replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
+      final savedAs = '${model}_hf_${ts}_$cleanPrompt.png';
+      File('${picDir.path}/$savedAs').writeAsBytesSync(imgBytes);
+      _log.info('Job $jobId: HF saved /app/pictures/$userId/$savedAs (${imgBytes.length} bytes)');
+
+      _imageJobs[jobId] = {
+        'status': 'done',
+        'images': [{'savedAs': savedAs, 'url': '/api/image/download/$savedAs'}],
+        'model': model,
+        'seed': seed,
+        'user_id': userId,
+      };
+    } catch (e) {
+      _log.severe('Job $jobId HF error: $e');
+      _failJob(jobId, 'HuggingFace: $e');
+    } finally {
+      client.close();
+    }
+  }
+
   Future<Response> _imageJobStatus(Request request, String jobId) async {
     final job = _imageJobs[jobId];
     if (job == null) {
@@ -1535,11 +1775,16 @@ class AppRouter {
       return _json({'error': 'Invalid filename'}, status: 400);
     }
     final picDir = '/app/pictures';
-    // User-scoped: check user subdirectory first, fall back to shared dir
-    final userFile = File('$picDir/$userId/$safe');
-    final sharedFile = File('$picDir/$safe');
-    final file = userFile.existsSync() ? userFile : sharedFile;
-    if (!file.existsSync()) {
+    // User-scoped: check user's own dir first, then shared, then legacy root
+    // Only the user's own files and shared/legacy are accessible
+    final userFile = userId.isNotEmpty ? File('$picDir/$userId/$safe') : null;
+    final sharedFile = File('$picDir/shared/$safe');
+    final legacyFile = File('$picDir/$safe');
+    final file = (userFile != null && userFile.existsSync()) ? userFile
+        : sharedFile.existsSync() ? sharedFile
+        : legacyFile.existsSync() ? legacyFile
+        : null;
+    if (file == null) {
       return _json({'error': 'File not found'}, status: 404);
     }
     // Verify file is within pictures directory (use p.isWithin for safe prefix check)
@@ -1590,6 +1835,10 @@ class AppRouter {
       'dreamshaper':      {'ckpt': 'dreamshaper_8.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
       'realistic_vision': {'ckpt': 'realistic_vision_v5.safetensors',  'steps': 30, 'cfg': 7.0, 'type': 'sd15'},
       'deliberate':       {'ckpt': 'deliberate_v3.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
+      // Specialized SDXL models (single checkpoint, 1024px native)
+      'juggernaut_xl':    {'ckpt': 'juggernaut_xl_v9.safetensors',     'steps': 30, 'cfg': 4.5, 'type': 'sd15'},
+      'animagine_xl':     {'ckpt': 'animagine_xl_31.safetensors',      'steps': 28, 'cfg': 5.0, 'type': 'sd15'},
+      'realvisxl':        {'ckpt': 'realvisxl_v5.safetensors',         'steps': 25, 'cfg': 4.0, 'type': 'sd15'},
     };
     final cfg = models[model] ?? models['sdxl_lightning']!;
     final s = steps ?? (cfg['steps'] as int);
@@ -1657,152 +1906,6 @@ class AppRouter {
     }
   }
 
-  // ── API Image Generation (OpenAI/Gemini via MCP) ─────────────────
-
-  /// Direct HTTP API calls to cloud image providers (no MCP, direct API).
-  Future<void> _runApiImageJob(String jobId, {
-    required String backend,
-    required String prompt,
-    required String negPrompt,
-    required int width,
-    required int height,
-    required int count,
-    int? upscaleTo,
-  }) async {
-    _imageJobs[jobId]!['status'] = 'generating';
-    try {
-      final fullPrompt = negPrompt.isNotEmpty ? '$prompt. Avoid: $negPrompt' : prompt;
-      String imageB64 = '';
-      int outW = width, outH = height;
-
-      if (backend == 'openai') {
-        final key = config.openaiApiKey;
-        if (key.isEmpty || key == 'ROTATE_ME') {
-          _failJob(jobId, 'OpenAI API key not configured — add OPENAI_API_KEY to .env');
-          return;
-        }
-        final size = _snapOpenaiSize(width, height);
-        final client = HttpClient();
-        try {
-          final req = await client.postUrl(Uri.parse('https://api.openai.com/v1/images/generations'));
-          req.headers.set('Authorization', 'Bearer $key');
-          req.headers.set('Content-Type', 'application/json');
-          req.write(jsonEncode({
-            'model': 'dall-e-3',
-            'prompt': fullPrompt,
-            'size': size,
-            'response_format': 'b64_json',
-            'n': 1,
-          }));
-          final resp = await req.close().timeout(const Duration(seconds: 90));
-          final body = await resp.transform(utf8.decoder).join();
-          if (resp.statusCode != 200) {
-            _failJob(jobId, 'OpenAI returned ${resp.statusCode}: ${body.length > 300 ? body.substring(0, 300) : body}');
-            return;
-          }
-          final data = jsonDecode(body) as Map<String, dynamic>;
-          final items = data['data'] as List? ?? [];
-          if (items.isEmpty) { _failJob(jobId, 'OpenAI returned no images'); return; }
-          imageB64 = (items[0] as Map)['b64_json'] as String? ?? '';
-          final parts = size.split('x');
-          outW = int.parse(parts[0]); outH = int.parse(parts[1]);
-        } finally {
-          client.close();
-        }
-
-      } else if (backend == 'gemini') {
-        final key = config.googleApiKey;
-        if (key.isEmpty) {
-          _failJob(jobId, 'Google API key not configured — add GOOGLE_API_KEY to .env');
-          return;
-        }
-        final ratio = width == height ? '1:1'
-            : width > height ? '16:9' : '9:16';
-        final client = HttpClient();
-        try {
-          // Gemini Imagen 3 API
-          final url = 'https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=$key';
-          final req = await client.postUrl(Uri.parse(url));
-          req.headers.set('Content-Type', 'application/json');
-          req.write(jsonEncode({
-            'instances': [{'prompt': fullPrompt}],
-            'parameters': {
-              'sampleCount': 1,
-              'aspectRatio': ratio,
-            },
-          }));
-          final resp = await req.close().timeout(const Duration(seconds: 90));
-          final body = await resp.transform(utf8.decoder).join();
-          if (resp.statusCode != 200) {
-            _failJob(jobId, 'Gemini returned ${resp.statusCode}: ${body.length > 300 ? body.substring(0, 300) : body}');
-            return;
-          }
-          final data = jsonDecode(body) as Map<String, dynamic>;
-          final predictions = data['predictions'] as List? ?? [];
-          if (predictions.isEmpty) { _failJob(jobId, 'Gemini returned no images'); return; }
-          imageB64 = (predictions[0] as Map)['bytesBase64Encoded'] as String? ?? '';
-          outW = 1024; outH = ratio == '1:1' ? 1024 : (ratio == '16:9' ? 576 : 1792);
-        } finally {
-          client.close();
-        }
-
-      } else {
-        _failJob(jobId, 'Unknown cloud backend: $backend');
-        return;
-      }
-
-      if (imageB64.isEmpty) { _failJob(jobId, 'No image data returned'); return; }
-
-      // Save to /app/pictures
-      final images = <Map<String, dynamic>>[];
-      try {
-        final bytes = base64Decode(imageB64);
-        final ts = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:\-T]'), '').substring(0, 15);
-        final cleanPrompt = prompt.length > 20
-            ? prompt.substring(0, 20).replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_')
-            : prompt.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
-        final savedAs = '${backend}_${ts}_$cleanPrompt.jpg';
-        File('/app/pictures/$savedAs').writeAsBytesSync(bytes);
-        images.add({'savedAs': savedAs, 'url': '/api/image/download/$savedAs', 'data': imageB64, 'mimeType': 'image/png'});
-      } catch (e) {
-        images.add({'data': imageB64, 'mimeType': 'image/png'});
-      }
-
-      // Upscale via ComfyUI if requested
-      if (upscaleTo != null && upscaleTo > outW && images.isNotEmpty && config.comfyuiUrl.isNotEmpty) {
-        _imageJobs[jobId]!['status'] = 'upscaling';
-        _log.info('Job $jobId: upscaling API images to ${upscaleTo}px via ComfyUI');
-        final upClient = HttpClient();
-        try {
-          final upscaled = await _upscaleImages(upClient, images, upscaleTo, outW, outH, backend, prompt);
-          if (upscaled.isNotEmpty) { images.clear(); images.addAll(upscaled); }
-        } finally {
-          upClient.close();
-        }
-      }
-
-      final apiDoneUserId = _imageJobs[jobId]?['user_id'];
-      _imageJobs[jobId] = {
-        'status': 'done',
-        'images': images,
-        'model': backend,
-        'seed': 0,
-        if (apiDoneUserId != null) 'user_id': apiDoneUserId,
-      };
-    } catch (e) {
-      _log.severe('API image job error: $e');
-      _failJob(jobId, '$e');
-    }
-  }
-
-  /// Snap arbitrary dimensions to valid OpenAI DALL-E 3 sizes.
-  static String _snapOpenaiSize(int w, int h) {
-    final ratio = w / (h == 0 ? 1 : h);
-    if (ratio > 1.2) return '1792x1024';
-    if (ratio < 0.8) return '1024x1792';
-    return '1024x1024';
-  }
-
   // ── Img2Img ComfyUI Workflow ──────────────────────────────────────
 
   Map<String, dynamic> _buildComfyImg2ImgWorkflow({
@@ -1820,11 +1923,14 @@ class AppRouter {
     const models = {
       'flux_schnell': {'unet': 'flux1-schnell.safetensors', 'steps': 4, 'cfg': 1.0, 'type': 'flux'},
       'flux_dev':     {'unet': 'flux1-dev.safetensors',     'steps': 25, 'cfg': 1.0, 'type': 'flux'},
-      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'unet': 'sdxl_lightning_4step.safetensors', 'steps': 4, 'cfg': 1.5, 'type': 'sdxl'},
+      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'unet': 'sdxl_lightning_4step.safetensors', 'steps': 4, 'cfg': 1.5, 'type': 'sdxl_lightning'},
       'sdxl_turbo':   {'ckpt': 'sdxl_turbo.safetensors', 'steps': 1, 'cfg': 1.0, 'type': 'sdxl'},
-      'dreamshaper':      {'ckpt': 'dreamshaper_8.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sdxl'},
-      'realistic_vision': {'ckpt': 'realistic_vision_v5.safetensors',  'steps': 30, 'cfg': 7.0, 'type': 'sdxl'},
-      'deliberate':       {'ckpt': 'deliberate_v3.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sdxl'},
+      'dreamshaper':      {'ckpt': 'dreamshaper_8.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
+      'realistic_vision': {'ckpt': 'realistic_vision_v5.safetensors',  'steps': 30, 'cfg': 7.0, 'type': 'sd15'},
+      'deliberate':       {'ckpt': 'deliberate_v3.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
+      'juggernaut_xl':    {'ckpt': 'juggernaut_xl_v9.safetensors',     'steps': 30, 'cfg': 4.5, 'type': 'sd15'},
+      'animagine_xl':     {'ckpt': 'animagine_xl_31.safetensors',      'steps': 28, 'cfg': 5.0, 'type': 'sd15'},
+      'realvisxl':        {'ckpt': 'realvisxl_v5.safetensors',         'steps': 25, 'cfg': 4.0, 'type': 'sd15'},
     };
     final cfg = models[model] ?? models['sdxl_lightning']!;
     final s = steps ?? (cfg['steps'] as int);
@@ -1848,11 +1954,30 @@ class AppRouter {
         '13': {'class_type': 'LoadImage', 'inputs': {'image': refFilename}},
         '12': {'class_type': 'VAEEncode', 'inputs': {'pixels': ['13', 0], 'vae': ['10', 0]}},
       };
-    } else {
-      // SDXL img2img: LoadImage → VAEEncode → KSampler(denoise<1) → VAEDecode → Save
+    } else if (type == 'sdxl_lightning') {
+      // SDXL Lightning img2img: CheckpointLoader + UNETLoader → ModelMerge → KSampler
       return {
         '3': {'class_type': 'KSampler', 'inputs': {
-          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'normal',
+          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'sgm_uniform',
+          'denoise': denoise,
+          'model': ['4c', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['12', 0]}},
+        '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
+        '4b': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'default'}},
+        '4c': {'class_type': 'ModelMergeSimple', 'inputs': {'model1': ['4', 0], 'model2': ['4b', 0], 'ratio': 1.0}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['4', 1]}},
+        '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['4', 1]}},
+        '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['3', 0], 'vae': ['4', 2]}},
+        '9': {'class_type': 'SaveImage', 'inputs': {'filename_prefix': 'aichat_img2img_$model', 'images': ['8', 0]}},
+        '13': {'class_type': 'LoadImage', 'inputs': {'image': refFilename}},
+        '12': {'class_type': 'VAEEncode', 'inputs': {'pixels': ['13', 0], 'vae': ['4', 2]}},
+      };
+    } else {
+      // SDXL/SD1.5 img2img: LoadImage → VAEEncode → KSampler(denoise<1) → VAEDecode → Save
+      return {
+        '3': {'class_type': 'KSampler', 'inputs': {
+          'seed': rng, 'steps': s, 'cfg': c,
+          'sampler_name': type == 'sd15' ? 'euler_ancestral' : 'euler',
+          'scheduler': 'normal',
           'denoise': denoise,
           'model': ['4', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['12', 0]}},
         '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
@@ -1884,11 +2009,14 @@ class AppRouter {
     const models = {
       'flux_schnell': {'unet': 'flux1-schnell.safetensors', 'steps': 4, 'cfg': 1.0, 'type': 'flux'},
       'flux_dev':     {'unet': 'flux1-dev.safetensors',     'steps': 25, 'cfg': 1.0, 'type': 'flux'},
-      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'unet': 'sdxl_lightning_4step.safetensors', 'steps': 4, 'cfg': 1.5, 'type': 'sdxl'},
+      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'unet': 'sdxl_lightning_4step.safetensors', 'steps': 4, 'cfg': 1.5, 'type': 'sdxl_lightning'},
       'sdxl_turbo':   {'ckpt': 'sdxl_turbo.safetensors', 'steps': 1, 'cfg': 1.0, 'type': 'sdxl'},
-      'dreamshaper':      {'ckpt': 'dreamshaper_8.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sdxl'},
-      'realistic_vision': {'ckpt': 'realistic_vision_v5.safetensors',  'steps': 30, 'cfg': 7.0, 'type': 'sdxl'},
-      'deliberate':       {'ckpt': 'deliberate_v3.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sdxl'},
+      'dreamshaper':      {'ckpt': 'dreamshaper_8.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
+      'realistic_vision': {'ckpt': 'realistic_vision_v5.safetensors',  'steps': 30, 'cfg': 7.0, 'type': 'sd15'},
+      'deliberate':       {'ckpt': 'deliberate_v3.safetensors',        'steps': 25, 'cfg': 7.0, 'type': 'sd15'},
+      'juggernaut_xl':    {'ckpt': 'juggernaut_xl_v9.safetensors',     'steps': 30, 'cfg': 4.5, 'type': 'sd15'},
+      'animagine_xl':     {'ckpt': 'animagine_xl_31.safetensors',      'steps': 28, 'cfg': 5.0, 'type': 'sd15'},
+      'realvisxl':        {'ckpt': 'realvisxl_v5.safetensors',         'steps': 25, 'cfg': 4.0, 'type': 'sd15'},
     };
     final cfg = models[model] ?? models['sdxl_lightning']!;
     final s = steps ?? (cfg['steps'] as int);
@@ -1915,10 +2043,31 @@ class AppRouter {
         '14': {'class_type': 'LoadImage', 'inputs': {'image': maskFilename}},
         '15': {'class_type': 'SetLatentNoiseMask', 'inputs': {'samples': ['12', 0], 'mask': ['14', 1]}},
       };
+    } else if (type == 'sdxl_lightning') {
+      // SDXL Lightning inpaint: CheckpointLoader + UNETLoader → ModelMerge → KSampler
+      return {
+        '3': {'class_type': 'KSampler', 'inputs': {
+          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'sgm_uniform',
+          'denoise': denoise,
+          'model': ['4c', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['15', 0]}},
+        '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
+        '4b': {'class_type': 'UNETLoader', 'inputs': {'unet_name': cfg['unet'], 'weight_dtype': 'default'}},
+        '4c': {'class_type': 'ModelMergeSimple', 'inputs': {'model1': ['4', 0], 'model2': ['4b', 0], 'ratio': 1.0}},
+        '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['4', 1]}},
+        '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['4', 1]}},
+        '8': {'class_type': 'VAEDecode', 'inputs': {'samples': ['3', 0], 'vae': ['4', 2]}},
+        '9': {'class_type': 'SaveImage', 'inputs': {'filename_prefix': 'aichat_inpaint_$model', 'images': ['8', 0]}},
+        '13': {'class_type': 'LoadImage', 'inputs': {'image': refFilename}},
+        '12': {'class_type': 'VAEEncode', 'inputs': {'pixels': ['13', 0], 'vae': ['4', 2]}},
+        '14': {'class_type': 'LoadImage', 'inputs': {'image': maskFilename}},
+        '15': {'class_type': 'SetLatentNoiseMask', 'inputs': {'samples': ['12', 0], 'mask': ['14', 1]}},
+      };
     } else {
       return {
         '3': {'class_type': 'KSampler', 'inputs': {
-          'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'normal',
+          'seed': rng, 'steps': s, 'cfg': c,
+          'sampler_name': type == 'sd15' ? 'euler_ancestral' : 'euler',
+          'scheduler': 'normal',
           'denoise': denoise,
           'model': ['4', 0], 'positive': ['6', 0], 'negative': ['7', 0], 'latent_image': ['15', 0]}},
         '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
@@ -1951,23 +2100,21 @@ class AppRouter {
     double denoise = 1.0,
   }) {
     final rng = seed ?? 0;
-    // ControlNet model filenames — must be installed in ComfyUI models/controlnet/
+    // ControlNet model filenames — SD 1.5 ControlNet v1.1 weights
     const controlModels = {
       'openpose': 'control_v11p_sd15_openpose.pth',
       'depth':    'control_v11f1p_sd15_depth.pth',
       'canny':    'control_v11p_sd15_canny.pth',
     };
-    // SDXL-only for ControlNet (FLUX ControlNet requires separate union models)
-    const models = {
-      'flux_schnell':   {'ckpt': 'sd_xl_base_1.0.safetensors', 'steps': 20, 'cfg': 7.0},
-      'flux_dev':       {'ckpt': 'sd_xl_base_1.0.safetensors', 'steps': 20, 'cfg': 7.0},
-      'sdxl_lightning': {'ckpt': 'sd_xl_base_1.0.safetensors', 'steps': 20, 'cfg': 7.0},
-      'sdxl_turbo':     {'ckpt': 'sd_xl_base_1.0.safetensors', 'steps': 20, 'cfg': 7.0},
-    };
-    final cfg = models[model] ?? models['sdxl_lightning']!;
-    final s = steps ?? (cfg['steps'] as int);
-    final c = cfg['cfg'] as double;
+    // SD 1.5 ControlNet requires SD 1.5 checkpoint (not SDXL/FLUX).
+    // Use DreamShaper v8 as the SD 1.5 base for all ControlNet workflows.
+    const ckpt = 'dreamshaper_8.safetensors';
+    final s = steps ?? 25;
+    const c = 7.0;
     final cnModel = controlModels[controlType] ?? controlModels['openpose']!;
+    // SD 1.5 native: 512x512, supports up to 768x768
+    final cnW = width > 768 ? 512 : width;
+    final cnH = height > 768 ? 512 : height;
 
     // ControlNet pipeline:
     // LoadImage(control) → ControlNetLoader → ControlNetApply(positive conditioning + control image)
@@ -1975,15 +2122,15 @@ class AppRouter {
     // If refFilename provided: img2img + controlnet (VAEEncode ref → latent)
     final latentNode = refFilename != null
         ? {'class_type': 'VAEEncode', 'inputs': {'pixels': ['20', 0], 'vae': ['4', 2]}}
-        : {'class_type': 'EmptyLatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}};
+        : {'class_type': 'EmptyLatentImage', 'inputs': {'width': cnW, 'height': cnH, 'batch_size': 1}};
 
     return {
       '3': {'class_type': 'KSampler', 'inputs': {
-        'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler', 'scheduler': 'normal',
+        'seed': rng, 'steps': s, 'cfg': c, 'sampler_name': 'euler_ancestral', 'scheduler': 'normal',
         'denoise': refFilename != null ? denoise : 1.0,
         // ControlNetApplyAdvanced outputs: [0]=positive, [1]=negative
         'model': ['4', 0], 'positive': ['17', 0], 'negative': ['17', 1], 'latent_image': ['5', 0]}},
-      '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': cfg['ckpt']}},
+      '4': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': ckpt}},
       '5': latentNode,
       '6': {'class_type': 'CLIPTextEncode', 'inputs': {'text': prompt, 'clip': ['4', 1]}},
       '7': {'class_type': 'CLIPTextEncode', 'inputs': {'text': negPrompt, 'clip': ['4', 1]}},

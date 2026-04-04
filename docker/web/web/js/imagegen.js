@@ -4,7 +4,7 @@ import { toast } from './toasts.js';
 
 // ── State ────────────────────────────────────────────────────────
 let igSelectedModel = 'sdxl_lightning';
-let igSelectedBackend = 'comfyui'; // comfyui | openai | gemini
+let igSelectedBackend = 'comfyui'; // comfyui only (cloud backends removed)
 let igGenerating = false;
 let igCurrentPreview = null;
 let igRefImageData = null;
@@ -15,6 +15,7 @@ const MODEL_NAMES = {
   flux_schnell: 'FLUX Schnell', flux_dev: 'FLUX Dev',
   sdxl_lightning: 'SDXL Lightning', sdxl_turbo: 'SDXL Turbo',
   dreamshaper: 'DreamShaper v8', realistic_vision: 'Realistic Vision', deliberate: 'Deliberate v3',
+  juggernaut_xl: 'Juggernaut XL', animagine_xl: 'Animagine XL', realvisxl: 'RealVisXL v5',
 };
 const SD15_MODELS = new Set(['dreamshaper', 'realistic_vision', 'deliberate']);
 
@@ -290,12 +291,20 @@ function clearInpaintMask() {
 async function generateInpaint() {
   const canvas = document.getElementById('ig-inpaint-canvas');
   if (!canvas || !igInpaintCtx) return;
+  igGenerating = true;
+  const btn = document.getElementById('ig-generate-btn');
+  const loading = document.getElementById('ig-loading');
+  if (btn) { btn.disabled = true; btn.textContent = 'Inpainting...'; }
+  if (loading) loading.classList.remove('hidden');
   // Extract mask: white where user painted, black elsewhere
   const maskCanvas = document.createElement('canvas');
   maskCanvas.width = canvas.width;
   maskCanvas.height = canvas.height;
   const maskCtx = maskCanvas.getContext('2d');
   const imgData = igInpaintCtx.getImageData(0, 0, canvas.width, canvas.height);
+  // Use selected target dimensions, not canvas preview dimensions
+  const targetWidth = parseInt(document.getElementById('ig-width').value) || 1024;
+  const targetHeight = parseInt(document.getElementById('ig-height').value) || 1024;
   // Create mask from painted regions (white = edit, black = keep)
   const previewImg = document.getElementById('ig-preview-img');
   const origImg = new Image();
@@ -317,7 +326,6 @@ async function generateInpaint() {
     }
     maskCtx.putImageData(maskData, 0, 0);
     const maskDataUri = maskCanvas.toDataURL('image/png');
-    closeInpaintMode();
     // Use the preview image as source + mask for inpaint generation
     const srcDataUri = previewImg.src.startsWith('blob:') ? origCanvas.toDataURL('image/png') : previewImg.src;
     // Trigger generation with mask
@@ -326,7 +334,7 @@ async function generateInpaint() {
     try {
       const body = {
         prompt, model: igSelectedModel, backend: igSelectedBackend,
-        width: canvas.width, height: canvas.height,
+        width: targetWidth, height: targetHeight,
         reference_image: srcDataUri,
         mask: maskDataUri,
         denoise: parseFloat(document.getElementById('ig-denoise').value || '0.75'),
@@ -337,8 +345,14 @@ async function generateInpaint() {
       });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const submit = await r.json();
-      if (submit.jobId) pollAndDisplay(submit.jobId, prompt);
+      if (submit.jobId) await pollAndDisplay(submit.jobId, prompt);
     } catch (e) { toast('Inpaint failed: ' + e.message, 'error'); }
+    finally {
+      igGenerating = false;
+      closeInpaintMode();
+      if (btn) { btn.disabled = false; btn.textContent = 'Generate'; }
+      if (loading) loading.classList.add('hidden');
+    }
   };
   origImg.src = previewImg.src;
 }
@@ -364,34 +378,15 @@ function selectIgModel(btn) {
   document.querySelectorAll('.ig-model-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   igSelectedModel = btn.dataset.model;
-  igSelectedBackend = btn.dataset.backend || 'comfyui';
-
-  // Toggle visibility of ComfyUI-specific controls
-  const isApi = igSelectedBackend !== 'comfyui';
-  const stepsField = document.getElementById('ig-steps').closest('.ig-field');
-  const seedField = document.getElementById('ig-seed').closest('.ig-field');
-  const cnSection = document.getElementById('ig-controlnet-section');
-  if (stepsField) stepsField.style.opacity = isApi ? '0.3' : '1';
-  if (seedField) seedField.style.opacity = isApi ? '0.3' : '1';
-  if (cnSection) cnSection.style.display = isApi ? 'none' : '';
-  // Update status text to reflect selected backend
-  const statusText = document.getElementById('ig-status-text');
-  if (statusText) {
-    if (isApi) {
-      const names = { openai: 'GPT-5.4 (OpenAI)', gemini: 'Gemini 2.5 Flash' };
-      statusText.textContent = (names[igSelectedBackend] || igSelectedBackend) + ' selected';
-      document.querySelector('.ig-status-dot').className = 'ig-status-dot cloud';
-    } else {
-      checkComfyUIStatus();
-    }
-  }
+  igSelectedBackend = 'comfyui';
+  checkComfyUIStatus();
 
   if (igSelectedModel === 'sdxl_turbo' || SD15_MODELS.has(igSelectedModel)) {
     document.getElementById('ig-width').value = '512';
     document.getElementById('ig-height').value = '512';
     const r4k = document.getElementById('ig-resolution').querySelector('[value="4096"]');
     if (r4k) r4k.disabled = SD15_MODELS.has(igSelectedModel);
-  } else if (!isApi) {
+  } else {
     document.getElementById('ig-width').value = '1024';
     document.getElementById('ig-height').value = '1024';
     const r4k = document.getElementById('ig-resolution').querySelector('[value="4096"]');
@@ -409,29 +404,37 @@ export async function checkComfyUIStatus() {
     const d = await r.json();
     if (d.ok) {
       dot.className = 'ig-status-dot';
-      // Query available models from ComfyUI and enable/disable buttons
-      try {
-        const modelsRes = await authFetch('/api/image/models');
-        if (modelsRes.ok) {
-          const md = await modelsRes.json();
-          const ckpts = new Set(md.checkpoints || []);
-          const unets = new Set(md.unets || []);
-          let available = 0;
-          document.querySelectorAll('.ig-model-btn[data-model]').forEach(btn => {
-            if (btn.dataset.backend) return; // Skip cloud models
-            const ckpt = btn.dataset.ckpt;
-            const unet = btn.dataset.unet;
-            const found = (ckpt && ckpts.has(ckpt)) || (unet && unets.has(unet));
-            btn.classList.toggle('disabled', !found);
-            if (found) available++;
-          });
-          txt.textContent = available + ' models ready' + (d.gpu ? ' \u2014 ' + d.gpu : '');
-        } else {
-          txt.textContent = 'ComfyUI ready' + (d.gpu ? ' \u2014 ' + d.gpu : '');
-        }
-      } catch { txt.textContent = 'ComfyUI ready' + (d.gpu ? ' \u2014 ' + d.gpu : ''); }
+      if (d.backend === 'huggingface') {
+        // HF fallback — enable all models (mapped server-side)
+        document.querySelectorAll('.ig-model-btn[data-model]').forEach(btn => {
+          if (!btn.dataset.backend) btn.classList.remove('disabled');
+        });
+        txt.textContent = 'HuggingFace API ready';
+      } else {
+        // ComfyUI — query available models
+        try {
+          const modelsRes = await authFetch('/api/image/models');
+          if (modelsRes.ok) {
+            const md = await modelsRes.json();
+            const ckpts = new Set(md.checkpoints || []);
+            const unets = new Set(md.unets || []);
+            let available = 0;
+            document.querySelectorAll('.ig-model-btn[data-model]').forEach(btn => {
+              if (btn.dataset.backend) return;
+              const ckpt = btn.dataset.ckpt;
+              const unet = btn.dataset.unet;
+              const found = (ckpt && ckpts.has(ckpt)) || (unet && unets.has(unet));
+              btn.classList.toggle('disabled', !found);
+              if (found) available++;
+            });
+            txt.textContent = available + ' models ready' + (d.gpu ? ' \u2014 ' + d.gpu : '');
+          } else {
+            txt.textContent = 'ComfyUI ready' + (d.gpu ? ' \u2014 ' + d.gpu : '');
+          }
+        } catch { txt.textContent = 'ComfyUI ready' + (d.gpu ? ' \u2014 ' + d.gpu : ''); }
+      }
     }
-    else { dot.className = 'ig-status-dot error'; txt.textContent = d.error || 'ComfyUI unreachable'; }
+    else { dot.className = 'ig-status-dot error'; txt.textContent = d.error || 'No image backend'; }
   } catch { dot.className = 'ig-status-dot error'; txt.textContent = 'Cannot reach backend'; }
 }
 
@@ -489,14 +492,7 @@ async function generateImage() {
     const submit = await r.json();
     if (!submit.jobId) throw new Error(submit.error || 'No job ID');
     await pollAndDisplay(submit.jobId, prompt);
-    // Restore status to reflect current backend selection
-    if (igSelectedBackend !== 'comfyui') {
-      const names = { openai: 'GPT-5.4 (OpenAI)', gemini: 'Gemini 2.5 Flash' };
-      dot.className = 'ig-status-dot cloud';
-      document.getElementById('ig-status-text').textContent = (names[igSelectedBackend] || igSelectedBackend) + ' \u2014 done';
-    } else {
-      dot.className = 'ig-status-dot';
-    }
+    dot.className = 'ig-status-dot';
   } catch (e) {
     if (e.message === 'Not authenticated') return;
     dot.className = 'ig-status-dot error';

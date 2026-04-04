@@ -2,6 +2,27 @@ import 'package:test/test.dart';
 import 'package:dartboard/models.dart';
 
 void main() {
+  group('Conversation', () {
+    test('toJson and defaults', () {
+      final conv = Conversation(id: 'c1', title: 'Test');
+      expect(conv.id, equals('c1'));
+      expect(conv.title, equals('Test'));
+      expect(conv.isDeveloperMode, isFalse);
+
+      final json = conv.toJson();
+      expect(json['id'], equals('c1'));
+      expect(json['is_developer_mode'], isFalse);
+    });
+
+    test('isDeveloperMode can be set', () {
+      final conv = Conversation(id: 'c2', isDeveloperMode: true);
+      expect(conv.isDeveloperMode, isTrue);
+
+      final json = conv.toJson();
+      expect(json['is_developer_mode'], isTrue);
+    });
+  });
+
   group('McpTool', () {
     test('fromJson parses correctly', () {
       final tool = McpTool.fromJson({

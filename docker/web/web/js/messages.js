@@ -6,6 +6,7 @@ import { openLightbox, buildImageCarousels } from './lightbox.js';
 import { loadConversations } from './conversations.js';
 import { toast } from './toasts.js';
 import { MODELS } from './models.js';
+import { tightenBubble } from './layout.js';
 
 export function postProcess(el) {
   if (!el) return;
@@ -65,6 +66,11 @@ export function appendMessage(role, content, toolCalls, files, msgId, timestamp)
     bubble.appendChild(createActions(role, content, div));
     bubble.appendChild(timeEl);
     div.appendChild(bubble); container.appendChild(div);
+    // Tighten user bubble to text width (pretext)
+    if (content && container.offsetWidth > 0) {
+      const tight = tightenBubble(content, Math.min(container.offsetWidth * 0.75, 600));
+      if (tight > 0) bubble.style.maxWidth = tight + 'px';
+    }
     return { div, contentEl: el, bodyEl: bubble };
   }
 
@@ -77,6 +83,11 @@ export function appendMessage(role, content, toolCalls, files, msgId, timestamp)
     body.appendChild(createActions(role, content, div));
     body.appendChild(timeEl);
     div.appendChild(av); div.appendChild(body); container.appendChild(div);
+    // Tighten assistant bubble to text width (pretext) — skip long/markdown-heavy content
+    if (content && content.length < 500 && !content.includes('```') && container.offsetWidth > 0) {
+      const tight = tightenBubble(content, Math.min(container.offsetWidth * 0.85, 800));
+      if (tight > 0) body.style.maxWidth = tight + 'px';
+    }
     return { div, contentEl: el, bodyEl: body };
   }
   return { div, contentEl: null, bodyEl: null };

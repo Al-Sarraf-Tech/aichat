@@ -6,7 +6,7 @@
 services:
   aichat-db:
     ports:
-      - "${AICHAT_DB_BIND:-127.0.0.1}:5432:5432"
+      - "${AICHAT_DB_BIND:-127.0.0.1}:5435:5432"
 
   aichat-vector:
     ports:

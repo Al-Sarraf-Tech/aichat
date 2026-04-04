@@ -7,6 +7,7 @@ class Conversation {
   final DateTime createdAt;
   DateTime updatedAt;
   int tokenCount;
+  bool isDeveloperMode;
 
   Conversation({
     required this.id,
@@ -17,6 +18,7 @@ class Conversation {
     DateTime? createdAt,
     DateTime? updatedAt,
     this.tokenCount = 0,
+    this.isDeveloperMode = false,
   }) : createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now();
 
@@ -29,6 +31,7 @@ class Conversation {
     'created_at': createdAt.toIso8601String(),
     'updated_at': updatedAt.toIso8601String(),
     'token_count': tokenCount,
+    'is_developer_mode': isDeveloperMode,
   };
 }
 
