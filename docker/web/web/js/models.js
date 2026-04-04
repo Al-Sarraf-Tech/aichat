@@ -21,18 +21,8 @@ export const MODELS = [
   { id: 'qwen', name: 'Qwen 3.5 (RTX 3090)', provider: 'qwen', icon: '\uD83D\uDFE0', desc: 'QA, summarization — local RTX 3090', cost: 'free', group: 'Local' },
 ];
 
-// ── API Models (direct API key — requires env vars set) ────────
-// Format: api:provider:model — routed via ApiClient, not MCP.
-export const API_MODELS = [
-  { id: 'api:claude:sonnet-4', name: 'Claude Sonnet 4 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — streaming, vision, tools', cost: 'paid', group: 'Anthropic' },
-  { id: 'api:claude:opus-4', name: 'Claude Opus 4 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — most capable', cost: 'paid', group: 'Anthropic' },
-  { id: 'api:claude:haiku-3.5', name: 'Claude Haiku 3.5 (API)', provider: 'anthropic', icon: '\uD83D\uDFE3', desc: 'Direct API — fast and cheap', cost: 'paid', group: 'Anthropic' },
-  { id: 'api:openai:gpt-5.4', name: 'GPT-5.4 (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — latest OpenAI', cost: 'paid', group: 'OpenAI' },
-  { id: 'api:openai:gpt-4.1', name: 'GPT-4.1 (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — reliable', cost: 'paid', group: 'OpenAI' },
-  { id: 'api:openai:o4-mini', name: 'o4-mini (API)', provider: 'openai', icon: '\uD83D\uDFE2', desc: 'Direct API — reasoning model', cost: 'paid', group: 'OpenAI' },
-  { id: 'api:google:gemini-2.5-flash', name: 'Gemini 2.5 Flash (API)', provider: 'google', icon: '\uD83D\uDD35', desc: 'Direct API — fast multimodal', cost: 'paid', group: 'Google' },
-  { id: 'api:google:gemini-2.5-pro', name: 'Gemini 2.5 Pro (API)', provider: 'google', icon: '\uD83D\uDD35', desc: 'Direct API — best quality', cost: 'paid', group: 'Google' },
-];
+// API models removed — no cloud API keys configured.
+export const API_MODELS = [];
 
 // Model health status cache (populated on dropdown open)
 const _modelHealth = {};
