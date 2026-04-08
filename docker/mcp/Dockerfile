@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-client \
         gosu \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r mcp && useradd -r -g mcp -d /app -s /sbin/nologin mcp \
+    && groupadd -r mcp \
+    && groupadd -g 105 render \
+    && useradd -r -g mcp -G render -d /app -s /sbin/nologin mcp \
     && mkdir -p /app/.ssh && chown mcp:mcp /app/.ssh && chmod 700 /app/.ssh
 
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
