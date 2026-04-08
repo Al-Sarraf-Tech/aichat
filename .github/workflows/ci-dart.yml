@@ -16,7 +16,7 @@ concurrency:
 jobs:
   repo-guard:
     name: Repository Context Guard
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     timeout-minutes: 2
     steps:
       - name: Verify repository ownership
@@ -30,7 +30,7 @@ jobs:
   lint:
     name: Dart Lint
     needs: repo-guard
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +49,7 @@ jobs:
 
   test:
     name: Dart Test
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, lint]
     timeout-minutes: 30
     steps:
@@ -85,7 +85,7 @@ jobs:
   frontend-check:
     name: Frontend Syntax
     needs: [repo-guard, lint]
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4

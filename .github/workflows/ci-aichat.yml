@@ -21,7 +21,7 @@ concurrency:
 jobs:
   repo-guard:
     name: Repository Context Guard
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     timeout-minutes: 2
     steps:
       - name: Verify repository ownership
@@ -35,7 +35,7 @@ jobs:
   lint:
     name: Lint
     needs: repo-guard
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -50,7 +50,7 @@ jobs:
         run: ruff check .
   test:
     name: Test
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, lint]
     timeout-minutes: 30
     steps:
@@ -69,7 +69,7 @@ jobs:
         run: pytest -v tests/test_architecture.py
   security:
     name: Security
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, lint]
     timeout-minutes: 30
     steps:
@@ -109,7 +109,7 @@ jobs:
         run: semgrep --config=auto --error .
   sbom:
     name: SBOM
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, test]
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 15
@@ -129,7 +129,7 @@ jobs:
           retention-days: 90
   docker:
     name: Docker Build
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, test]
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 45
@@ -145,7 +145,7 @@ jobs:
         run: command -v docker >/dev/null && docker compose version >/dev/null 2>&1 && docker compose build aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp || echo 'docker compose not available — skipping build'
   integration:
     name: Integration
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs: [repo-guard, test]
     timeout-minutes: 60
     steps:
@@ -173,7 +173,7 @@ jobs:
           echo 'Integration batch: smoke-tests'
   release:
     name: Release
-    runs-on: [self-hosted, unified-all]
+    runs-on: [self-hosted, python-slim]
     needs:
       - repo-guard
       - test
