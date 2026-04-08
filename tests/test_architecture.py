@@ -62,7 +62,8 @@ _EXPECTED_MEGA_TOOLS = {
 }
 
 # Non-mega tools — use their own schema (not the mega-tool action pattern)
-_STANDALONE_TOOLS = {"chat", "image_pipeline"}
+# workspace is dispatched via a dedicated if-block (like chat/image_pipeline), not via _MEGA_TOOL_MAP
+_STANDALONE_TOOLS = {"chat", "image_pipeline", "workspace"}
 
 # Expected actions per mega-tool (minimum set that must exist)
 _EXPECTED_ACTIONS = {
