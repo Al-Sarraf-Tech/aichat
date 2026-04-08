@@ -34,7 +34,7 @@ RUN chown -R mcp:mcp /app
 
 RUN chmod +x /app/entrypoint.sh
 
-HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8096/health', timeout=3)"
 
 ENTRYPOINT ["/app/entrypoint.sh"]

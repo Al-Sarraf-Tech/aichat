@@ -9638,13 +9638,27 @@ async def messages(request: Request, sessionId: str = "") -> Response:
 # ---------------------------------------------------------------------------
 
 async def _probe_ssh() -> str:
-    """Check SSH connectivity to host (5s timeout)."""
+    """Check SSH connectivity to host via lightweight TCP connect (no auth).
+
+    Previous implementation ran ``ssh … echo ok`` every 15s (Docker healthcheck),
+    creating ~240 authenticated sessions/hour and flooding the sshd journal.
+    A TCP connect to the SSH port is sufficient to confirm sshd is listening
+    without any authentication, session creation, or log noise.
+    """
     try:
-        from agents import _run_ssh_cli, _ssh_cb
+        from agents import SSH_HOST, SSH_PORT, _ssh_cb
         if _ssh_cb.is_open:
             return "circuit_open"
-        r = await _run_ssh_cli("probe", "echo ok", timeout_s=5.0)
-        return "ok" if r.success and "ok" in r.content else f"exit_{r.exit_code}"
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(SSH_HOST, int(SSH_PORT)), timeout=3.0,
+        )
+        writer.close()
+        await writer.wait_closed()
+        return "ok"
+    except (TimeoutError, asyncio.TimeoutError):
+        return "timeout"
+    except OSError as exc:
+        return f"error: {str(exc)[:80]}"
     except Exception as exc:
         return f"error: {str(exc)[:80]}"
 
