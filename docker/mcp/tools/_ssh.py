@@ -309,7 +309,8 @@ class SSHExecutor:
             )
 
         target = self._resolve_host(host)
-        port_flags = ["-p", str(port)] if port is not None else []
+        effective_port = port if port is not None else self._port
+        port_flags = ["-p", str(effective_port)]
         cmd_args = ["ssh", *_SSH_FLAGS, *port_flags, target, command]
 
         start = time.monotonic()
