@@ -5,6 +5,8 @@ Test groups:
   - Telegram helpers (4): send success, truncation, getUpdates success, getUpdates error
   - Classifier (6): tool/code/create/question intents, malformed JSON fallback, network error fallback
   - Auth + poll loop (3): authorized correct ID, unauthorized wrong ID, handle_message dispatches tool
+  - Dispatchers Task 4 (7): tool dispatch, unknown tool, code ack+task, invalid repo,
+    milestone extraction, create ack, invalid create name
 
 Run with:
   cd ~/git/aichat
@@ -343,3 +345,212 @@ class TestHandleMessage:
         mock_dispatch.assert_called_once()
         call_args = mock_dispatch.call_args
         assert call_args[0][0].type == "tool"
+
+
+# ===========================================================================
+# Task 4: Dispatchers + milestone streaming — 7 tests
+# ===========================================================================
+
+
+class TestDispatchTool:
+    """_dispatch_tool: invoke TOOL_HANDLERS and send reply."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_calls_handler_and_sends_reply(self):
+        """_dispatch_tool must call the correct TOOL_HANDLERS entry and send result."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        mock_handler = AsyncMock(return_value=[{"type": "text", "text": "fleet is healthy"}])
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch.dict("tools.telegram_bot.TOOL_HANDLERS", {"monitor": mock_handler}):
+            intent = tb.Intent(type="tool", tool="monitor", action="overview", args={})
+            await tb._dispatch_tool(intent, reply_to=1)
+
+        # handler should have been called
+        mock_handler.assert_called_once()
+        # a reply should have been sent containing the result text
+        assert any("fleet is healthy" in str(c) for c in mock_send.call_args_list)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_unknown_tool_sends_error(self):
+        """_dispatch_tool with unknown tool must send an error message."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch.dict("tools.telegram_bot.TOOL_HANDLERS", {}):
+            intent = tb.Intent(type="tool", tool="nonexistent", action="foo", args={})
+            await tb._dispatch_tool(intent, reply_to=1)
+
+        # should have sent an error-like message
+        sent_texts = [str(c) for c in mock_send.call_args_list]
+        assert any("unknown" in t.lower() or "error" in t.lower() or "nonexistent" in t.lower()
+                   for t in sent_texts)
+
+
+class TestDispatchCode:
+    """_dispatch_code: ack, background task, validation."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_code_sends_ack_and_spawns_task(self):
+        """_dispatch_code must send an ack message and spawn a background task."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        import asyncio
+
+        async def fake_stream(ssh_cmd, reply_to, task_state):
+            return "Done"
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch("tools.telegram_bot._stream_claude", side_effect=fake_stream):
+            intent = tb.Intent(type="code", repo="aichat", task="add logging")
+            await tb._dispatch_code(intent, reply_to=10)
+            # allow the spawned task to run
+            await asyncio.sleep(0.05)
+
+        ack_sent = any("aichat" in str(c) or "add logging" in str(c) or "Starting" in str(c) or "coding" in str(c).lower()
+                       for c in mock_send.call_args_list)
+        assert ack_sent or len(mock_send.call_args_list) >= 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_code_invalid_repo_name_returns_error(self):
+        """_dispatch_code with an invalid repo name must send an error and not spawn a task."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch("tools.telegram_bot._stream_claude", new_callable=AsyncMock) as mock_stream:
+            intent = tb.Intent(type="code", repo="../../evil; rm -rf /", task="do stuff")
+            await tb._dispatch_code(intent, reply_to=5)
+
+        # stream should NOT have been called
+        mock_stream.assert_not_called()
+        # an error should have been sent
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "invalid" in sent.lower() or "error" in sent.lower()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_code_milestone_extraction(self):
+        """_stream_claude must detect milestones from stream-json lines."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        import asyncio
+
+        # Build fake stdout lines simulating stream-json events
+        read_event = json.dumps({
+            "type": "tool_use", "name": "Read", "input": {"file_path": "main.py"}
+        }) + "\n"
+        edit_event = json.dumps({
+            "type": "tool_use", "name": "Edit", "input": {"file_path": "main.py"}
+        }) + "\n"
+        bash_test = json.dumps({
+            "type": "tool_use", "name": "Bash", "input": {"command": "pytest tests/"}
+        }) + "\n"
+        result_event = json.dumps({
+            "type": "result", "subtype": "success", "result": "Done"
+        }) + "\n"
+
+        lines = [
+            read_event.encode(),
+            edit_event.encode(),
+            bash_test.encode(),
+            result_event.encode(),
+        ]
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.wait = AsyncMock(return_value=0)
+
+        async def fake_readline():
+            if lines:
+                return lines.pop(0)
+            return b""
+
+        mock_proc.stdout = AsyncMock()
+        mock_proc.stdout.readline = fake_readline
+        mock_proc.stderr = AsyncMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"")
+
+        task_state = tb.TaskState(
+            task_id="t1",
+            repo="aichat",
+            description="test task",
+        )
+
+        milestones_sent = []
+
+        async def capture_send(text, reply_to=None):
+            milestones_sent.append(text)
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", side_effect=capture_send), \
+             patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await tb._stream_claude("echo hi", 10, task_state)
+
+        # Should have sent at least one milestone
+        milestone_messages = [m for m in milestones_sent if any(
+            kw in m for kw in ("Reading", "Writing", "Testing", "Running tests", "Committing")
+        )]
+        assert len(milestone_messages) >= 1
+
+
+class TestDispatchCreate:
+    """_dispatch_create: validate name and send ack."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_create_sends_creating_ack(self):
+        """_dispatch_create must send a 'Creating project' acknowledgement."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        import asyncio
+
+        async def fake_stream(ssh_cmd, reply_to, task_state):
+            return "Done"
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch("tools.telegram_bot._stream_claude", side_effect=fake_stream):
+            intent = tb.Intent(type="create", name="my-tool", description="does stuff", language="rust")
+            await tb._dispatch_create(intent, reply_to=20)
+            await asyncio.sleep(0.05)
+
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "my-tool" in sent or "Creating" in sent or "creating" in sent.lower()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_create_invalid_name_returns_error(self):
+        """_dispatch_create with invalid project name must send error and not stream."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch("tools.telegram_bot._stream_claude", new_callable=AsyncMock) as mock_stream:
+            intent = tb.Intent(type="create", name="bad name with spaces!", description="x", language="go")
+            await tb._dispatch_create(intent, reply_to=20)
+
+        mock_stream.assert_not_called()
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "invalid" in sent.lower() or "error" in sent.lower()

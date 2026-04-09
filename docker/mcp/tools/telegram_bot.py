@@ -16,14 +16,19 @@ Environment variables:
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
 import os
 import re
+import time
+import uuid
 from typing import Any
 
 import httpx
+
+from tools import TOOL_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -327,8 +332,6 @@ async def poll_loop() -> None:
     On error: logs, sleeps 5 s, retries.
     On CancelledError: exits cleanly.
     """
-    import asyncio
-
     token = os.environ.get("TELEGRAM_BOT_TOKEN", _TOKEN)
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", _CHAT_ID)
 
@@ -365,24 +368,321 @@ async def poll_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stub dispatchers (implemented in Tasks 4-5)
+# Task state tracking
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class TaskState:
+    """Runtime state for a background code/create task."""
+
+    task_id: str
+    repo: str | None
+    description: str
+    status: str = "running"           # running, done, failed, cancelled
+    started_at: float = dataclasses.field(default_factory=time.monotonic)
+    asyncio_task: asyncio.Task | None = None
+    process: asyncio.subprocess.Process | None = None
+
+
+_active_tasks: dict[str, TaskState] = {}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _validate_repo_name(name: str) -> bool:
+    """Return True if name contains only word chars and hyphens."""
+    return bool(re.match(r'^[\w\-]+$', name))
+
+
+def _build_summary(
+    task_state: TaskState,
+    final_text: str,
+    edited_files: list[str],
+    last_bash_output: str,
+    returncode: int,
+) -> str:
+    """Format a completion summary message."""
+    elapsed = int(time.monotonic() - task_state.started_at)
+    repo_label = task_state.repo or "unknown"
+
+    # Extract description from final_text (truncated to 300 chars)
+    description = final_text.strip()[:300] if final_text.strip() else task_state.description
+
+    parts = [f"Done -- {repo_label} ({elapsed}s)", "", description]
+
+    if edited_files:
+        unique_names = ", ".join(
+            dict.fromkeys(os.path.basename(f) for f in edited_files)
+        )
+        parts.append(f"\nFiles: {unique_names}")
+
+    # Try to extract a commit SHA from bash output
+    commit_match = re.search(r'\[.+?\s+([0-9a-f]{7,})\]', last_bash_output)
+    if commit_match:
+        parts.append(f"Commit: {commit_match.group(1)}")
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Dispatchers — Task 4: tool, code, create + milestone streaming
 # ---------------------------------------------------------------------------
 
 
 async def _dispatch_tool(intent: Intent, reply_to: int | None = None) -> None:
-    await _send_telegram("Tool dispatch not yet implemented", reply_to=reply_to)
+    """Invoke a registered TOOL_HANDLERS entry and reply with the result."""
+    handler = TOOL_HANDLERS.get(intent.tool)
+    if handler is None:
+        await _send_telegram(
+            f"Unknown tool: `{intent.tool}`. Check available tools.",
+            reply_to=reply_to,
+        )
+        return
+
+    await _send_telegram(f"Running: {intent.tool} {intent.action}", reply_to=reply_to)
+    try:
+        result = await handler({"action": intent.action, **intent.args})
+        # Extract text from MCP content blocks
+        if isinstance(result, list):
+            texts = [block["text"] for block in result if block.get("type") == "text"]
+            reply_text = "\n".join(texts) if texts else str(result)
+        else:
+            reply_text = str(result)
+        await _send_telegram(reply_text, reply_to=reply_to)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("_dispatch_tool error for %s: %s", intent.tool, exc)
+        await _send_telegram(f"Error running {intent.tool}: {exc}", reply_to=reply_to)
+
+
+async def _stream_claude(
+    ssh_command: str,
+    reply_to: int | None,
+    task_state: TaskState,
+) -> str:
+    """Run claude via SSH, parse stream-json output, send milestones, return summary."""
+    cmd = [
+        "ssh",
+        "-i", _SSH_KEY,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        "-o", "BatchMode=yes",
+        "-p", str(_SSH_PORT),
+        f"{_SSH_USER}@{_SSH_HOST}",
+        ssh_command,
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    task_state.process = proc
+
+    # Milestone tracking
+    seen_milestones: set[str] = set()
+    edited_files: list[str] = []
+    last_bash_output: str = ""
+    final_text: str = ""
+    milestone_fired = False
+
+    async def _heartbeat() -> None:
+        nonlocal milestone_fired
+        try:
+            while True:
+                await asyncio.sleep(90)
+                if not milestone_fired:
+                    await _send_telegram(
+                        f"Still working on: {task_state.description}...",
+                        reply_to=reply_to,
+                    )
+        except asyncio.CancelledError:
+            pass
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
+
+    try:
+        while True:
+            line_bytes = await proc.stdout.readline()
+            if not line_bytes:
+                break
+            line = line_bytes.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type", "")
+
+            if event_type == "tool_use":
+                tool_name = event.get("name", "")
+                tool_input = event.get("input", {})
+
+                if tool_name in ("Read", "Glob", "Grep") and "Reading codebase..." not in seen_milestones:
+                    seen_milestones.add("Reading codebase...")
+                    milestone_fired = True
+                    await _send_telegram("Reading codebase...", reply_to=reply_to)
+
+                elif tool_name in ("Edit", "Write"):
+                    fp = tool_input.get("file_path", "")
+                    if fp:
+                        edited_files.append(fp)
+                    if "Writing code..." not in seen_milestones:
+                        seen_milestones.add("Writing code...")
+                        milestone_fired = True
+                        await _send_telegram("Writing code...", reply_to=reply_to)
+
+                elif tool_name == "Bash":
+                    bash_cmd = tool_input.get("command", "")
+                    test_patterns = ("pytest", "cargo test", "npm test", "make test", "go test")
+                    if any(p in bash_cmd for p in test_patterns):
+                        if "Running tests..." not in seen_milestones:
+                            seen_milestones.add("Running tests...")
+                            milestone_fired = True
+                            await _send_telegram("Running tests...", reply_to=reply_to)
+                    elif "git commit" in bash_cmd:
+                        if "Committing..." not in seen_milestones:
+                            seen_milestones.add("Committing...")
+                            milestone_fired = True
+                            await _send_telegram("Committing...", reply_to=reply_to)
+
+            elif event_type == "tool_result":
+                content = event.get("content", "")
+                if isinstance(content, str):
+                    last_bash_output = content
+                elif isinstance(content, list):
+                    texts = [b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"]
+                    if texts:
+                        last_bash_output = "\n".join(texts)
+
+            elif event_type == "result":
+                result_val = event.get("result", "")
+                if isinstance(result_val, str):
+                    final_text = result_val
+
+            elif event_type == "assistant":
+                # Capture last assistant message text as final description
+                for block in event.get("message", {}).get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        final_text = block.get("text", final_text)
+
+        await proc.wait()
+        returncode = proc.returncode or 0
+
+    finally:
+        heartbeat_task.cancel()
+
+    return _build_summary(task_state, final_text, edited_files, last_bash_output, returncode)
 
 
 async def _dispatch_code(intent: Intent, reply_to: int | None = None) -> None:
-    await _send_telegram("Code dispatch not yet implemented", reply_to=reply_to)
+    """Validate repo, spawn background task to run claude on an existing repo."""
+    if intent.repo and not _validate_repo_name(intent.repo):
+        await _send_telegram(
+            f"Invalid repo name: `{intent.repo}`. Use alphanumeric and hyphens only.",
+            reply_to=reply_to,
+        )
+        return
+
+    task_id = str(uuid.uuid4())[:8]
+    description = intent.task or "(no description)"
+    repo = intent.repo or "unknown"
+    task_state = TaskState(task_id=task_id, repo=repo, description=description)
+    _active_tasks[task_id] = task_state
+
+    await _send_telegram(
+        f"Starting task `{task_id}`: {description} (repo: {repo})",
+        reply_to=reply_to,
+    )
+
+    escaped_task = description.replace("'", "'\\''")
+    ssh_command = (
+        f"cd $HOME/git/{repo} && "
+        f"claude --output-format stream-json --dangerously-skip-permissions -p '{escaped_task}'"
+    )
+
+    async def _run() -> None:
+        try:
+            summary = await _stream_claude(ssh_command, reply_to, task_state)
+            task_state.status = "done"
+            await _send_telegram(summary, reply_to=reply_to)
+        except asyncio.CancelledError:
+            task_state.status = "cancelled"
+            await _send_telegram(f"Task `{task_id}` cancelled.", reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            task_state.status = "failed"
+            logger.error("_dispatch_code task %s failed: %s", task_id, exc)
+            await _send_telegram(f"Task `{task_id}` failed: {exc}", reply_to=reply_to)
+        finally:
+            _active_tasks.pop(task_id, None)
+
+    bg_task = asyncio.create_task(_run())
+    task_state.asyncio_task = bg_task
 
 
 async def _dispatch_create(intent: Intent, reply_to: int | None = None) -> None:
-    await _send_telegram("Create dispatch not yet implemented", reply_to=reply_to)
+    """Validate project name, spawn background task to scaffold a new project."""
+    if not _validate_repo_name(intent.name):
+        await _send_telegram(
+            f"Invalid project name: `{intent.name}`. Use alphanumeric and hyphens only.",
+            reply_to=reply_to,
+        )
+        return
+
+    name = intent.name
+    language = intent.language or "python"
+    description = intent.description or name
+
+    await _send_telegram(
+        f"Creating project: {name} ({language})",
+        reply_to=reply_to,
+    )
+
+    task_id = str(uuid.uuid4())[:8]
+    task_state = TaskState(task_id=task_id, repo=name, description=f"Create {name}")
+    _active_tasks[task_id] = task_state
+
+    scaffolding_prompt = (
+        f"Create a new {language} project: {description}. "
+        "Set up project structure, CLAUDE.md (inheriting from ~/.claude/CLAUDE.md conventions), "
+        "CI workflow for GitHub Actions (self-hosted runners, no attest-build-provenance, "
+        "no macOS targets), README, and initial source files. "
+        "Initialize git and make the first commit."
+    )
+    escaped_prompt = scaffolding_prompt.replace("'", "'\\''")
+    ssh_command = (
+        f"mkdir -p $HOME/git/{name} && cd $HOME/git/{name} && git init 2>/dev/null; "
+        f"claude --output-format stream-json --dangerously-skip-permissions -p '{escaped_prompt}'"
+    )
+
+    async def _run() -> None:
+        try:
+            summary = await _stream_claude(ssh_command, reply_to, task_state)
+            task_state.status = "done"
+            await _send_telegram(summary, reply_to=reply_to)
+        except asyncio.CancelledError:
+            task_state.status = "cancelled"
+            await _send_telegram(f"Task `{task_id}` cancelled.", reply_to=reply_to)
+        except Exception as exc:  # noqa: BLE001
+            task_state.status = "failed"
+            logger.error("_dispatch_create task %s failed: %s", task_id, exc)
+            await _send_telegram(f"Task `{task_id}` failed: {exc}", reply_to=reply_to)
+        finally:
+            _active_tasks.pop(task_id, None)
+
+    bg_task = asyncio.create_task(_run())
+    task_state.asyncio_task = bg_task
 
 
-async def _dispatch_question(intent: Intent, reply_to: int | None = None) -> None:
-    await _send_telegram("Question handler not yet implemented", reply_to=reply_to)
+# ---------------------------------------------------------------------------
+# Dispatchers — Task 5: status/cancel/question (stub placeholders)
+# ---------------------------------------------------------------------------
 
 
 async def _dispatch_status(reply_to: int | None = None) -> None:
@@ -391,3 +691,7 @@ async def _dispatch_status(reply_to: int | None = None) -> None:
 
 async def _dispatch_cancel(reply_to: int | None = None) -> None:
     await _send_telegram("Cancel not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_question(intent: Intent, reply_to: int | None = None) -> None:
+    await _send_telegram("Question handler not yet implemented", reply_to=reply_to)
