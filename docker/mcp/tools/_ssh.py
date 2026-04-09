@@ -36,7 +36,6 @@ _DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
     {
         "amarillo",
         "dominus",
-        "sentinel",
         "host.docker.internal",
         "192.168.50.2",
     }

@@ -29,7 +29,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 
 THERMAL_WARN_C: float = 85.0
 DISK_WARN_PCT: int = 85
-FLEET_HOSTS: list[str] = ["amarillo", "dominus", "sentinel"]
+FLEET_HOSTS: list[str] = ["amarillo", "dominus"]
 
 # Services to health-check (name, URL)
 _SERVICES: list[tuple[str, str]] = [
@@ -114,15 +114,39 @@ def _parse_temps(sensors_json: str) -> list[tuple[str, float]]:
             if any(skip in feature_name for skip in _SKIP_FEATURES):
                 continue
             for subkey, value in feature_data.items():
-                # Only temp*_input fields are actual temperatures.
                 if subkey.startswith("temp") and subkey.endswith("_input") and isinstance(value, (int, float)):
-                    # Skip obviously bogus values (negative or > 150C)
                     if value < -40 or value > 150:
                         continue
                     label = f"{chip_name}/{feature_name}"
                     results.append((label, float(value)))
 
     return results
+
+
+def _summarize_temps(temps: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Reduce full temp list to key readings: CPU package, GPU, NVMe composites.
+
+    Skips individual cores, individual NVMe sensors, NIC temps, board sensors.
+    """
+    summary: list[tuple[str, float]] = []
+    for label, val in temps:
+        lower = label.lower()
+        # CPU package temp (not individual cores)
+        if "package" in lower:
+            summary.append(("CPU", val))
+        # GPU temp
+        elif "i915" in lower or "amdgpu" in lower:
+            summary.append(("GPU", val))
+        # NVMe composite only (not Sensor 1/2/8)
+        elif "nvme" in lower and "composite" in lower:
+            # Use last path component for drive identity
+            drive = label.split("/")[0].replace("nvme-pci-", "NVMe ")
+            summary.append((drive, val))
+    # If nothing matched (e.g., different sensor layout), return max temp
+    if not summary and temps:
+        max_temp = max(temps, key=lambda t: t[1])
+        summary.append(("max", max_temp[1]))
+    return summary
 
 
 def _parse_mem(free_output: str) -> tuple[int, int]:
@@ -348,14 +372,14 @@ async def _tailscale(ssh: SSHExecutor) -> str:
     # The field may be "Peer" (singular, dict of dicts) or "Peers"
     peers: dict[str, Any] = data.get("Peer", data.get("Peers", {}))
     if peers:
-        lines.append("  peers:")
-        for peer_data in peers.values():
+        # Filter out funnel-ingress-node and only show real devices
+        real_peers = [p for p in peers.values() if p.get("HostName", "").lower() != "funnel-ingress-node"]
+        online = sum(1 for p in real_peers if p.get("Online"))
+        lines.append(f"  {online}/{len(real_peers)} peers online")
+        for peer_data in real_peers:
             p_name = peer_data.get("HostName", "?")
-            p_ips = ", ".join(peer_data.get("TailscaleIPs", []))
             p_online = "online" if peer_data.get("Online") else "offline"
-            p_os = peer_data.get("OS", "")
-            os_str = f" ({p_os})" if p_os else ""
-            lines.append(f"    {p_name}{os_str} [{p_ips}] {p_online}")
+            lines.append(f"    {p_name}: {p_online}")
     else:
         lines.append("  peers: (none)")
 
@@ -412,13 +436,15 @@ async def _overview(ssh: SSHExecutor) -> str:
         else:
             df_part = rest2
 
-        # Thermals
+        # Thermals (summarized: CPU package, GPU, NVMe composites)
         temps = _parse_temps(sensors_part.strip())
-        if temps:
-            lines.append("  Temps:")
-            for label, val in temps:
+        key_temps = _summarize_temps(temps)
+        if key_temps:
+            temp_parts = []
+            for label, val in key_temps:
                 flag = " WARNING" if val >= THERMAL_WARN_C else ""
-                lines.append(f"    {label}: {val:.1f}°C{flag}")
+                temp_parts.append(f"{label} {val:.0f}C{flag}")
+            lines.append(f"  Temps: {' | '.join(temp_parts)}")
         else:
             lines.append("  Temps: (no data)")
 
@@ -430,13 +456,15 @@ async def _overview(ssh: SSHExecutor) -> str:
         else:
             lines.append("  Mem: (no data)")
 
-        # Disk
+        # Disk (only mounts with >5% usage, compact format)
         mounts = _parse_df(df_part.strip())
-        if mounts:
-            lines.append("  Disk:")
-            for mount, pct in mounts:
-                flag = f" WARNING ({pct}% used)" if pct >= DISK_WARN_PCT else ""
-                lines.append(f"    {mount}: {pct}%{flag}")
+        significant = [(m, p) for m, p in mounts if p > 5]
+        if significant:
+            disk_parts = []
+            for mount, pct in significant:
+                flag = " WARNING" if pct >= DISK_WARN_PCT else ""
+                disk_parts.append(f"{mount} {pct}%{flag}")
+            lines.append(f"  Disk: {' | '.join(disk_parts)}")
         else:
             lines.append("  Disk: (no data)")
 
@@ -475,24 +503,20 @@ async def _overview(ssh: SSHExecutor) -> str:
     else:
         lines.append("  (none or unreachable)")
 
-    # Tailscale
+    # Tailscale (real devices only, skip funnel-ingress-node)
     ts_r: SSHResult = await ssh.run("amarillo", "tailscale status --json")
     lines.append("\n--- Tailscale ---")
     if ts_r.returncode == 0:
         try:
             ts_data = json.loads(ts_r.stdout)
-            self_info = ts_data.get("Self", {})
-            if self_info:
-                name = self_info.get("HostName", "?")
-                ips = ", ".join(self_info.get("TailscaleIPs", []))
-                online = "online" if self_info.get("Online") else "offline"
-                lines.append(f"  self: {name} [{ips}] {online}")
-            peers: dict[str, Any] = ts_data.get("Peer", ts_data.get("Peers", {}))
-            for peer_data in peers.values():
-                p_name = peer_data.get("HostName", "?")
-                p_ips = ", ".join(peer_data.get("TailscaleIPs", []))
-                p_online = "online" if peer_data.get("Online") else "offline"
-                lines.append(f"  peer: {p_name} [{p_ips}] {p_online}")
+            peers_raw: dict[str, Any] = ts_data.get("Peer", ts_data.get("Peers", {}))
+            real_peers = [p for p in peers_raw.values() if p.get("HostName", "").lower() != "funnel-ingress-node"]
+            online = sum(1 for p in real_peers if p.get("Online"))
+            lines.append(f"  {online}/{len(real_peers)} devices online")
+            for p in real_peers:
+                name = p.get("HostName", "?")
+                status = "online" if p.get("Online") else "offline"
+                lines.append(f"  {name}: {status}")
         except (json.JSONDecodeError, AttributeError):
             lines.append("  (could not parse tailscale JSON)")
     else:

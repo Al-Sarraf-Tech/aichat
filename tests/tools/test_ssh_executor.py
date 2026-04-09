@@ -27,7 +27,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 # Helpers / constants
 # ===========================================================================
 
-_DEFAULT_ALLOWED = {"amarillo", "dominus", "sentinel", "host.docker.internal", "192.168.50.2"}
+_DEFAULT_ALLOWED = {"amarillo", "dominus", "host.docker.internal", "192.168.50.2"}
 
 
 # ===========================================================================
@@ -88,8 +88,8 @@ class TestHostResolution:
         """A bare name that is NOT an alias gets .tail9bdca.ts.net appended."""
         ex = SSHExecutor()
         # Use a name that isn't in _HOST_ALIASES
-        resolved = ex._resolve_host("sentinel")
-        assert resolved == "sentinel.tail9bdca.ts.net"
+        resolved = ex._resolve_host("newhost")
+        assert resolved == "newhost.tail9bdca.ts.net"
 
     def test_dominus_resolves_to_lan_ip(self):
         """dominus alias resolves to LAN IP."""
@@ -172,10 +172,10 @@ class TestRunCommand:
         """run() must raise RuntimeError when the circuit is open."""
         ex = SSHExecutor()
         for _ in range(3):
-            ex._record_failure("sentinel")
+            ex._record_failure("amarillo")
 
         with pytest.raises(RuntimeError, match="[Cc]ircuit.*open|[Oo]pen.*circuit"):
-            await ex.run("sentinel", "uptime")
+            await ex.run("amarillo", "uptime")
 
 
 # ===========================================================================
