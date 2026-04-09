@@ -59,11 +59,15 @@ _EXPECTED_MEGA_TOOLS = {
     "planner", "jobs", "research", "think", "system",
     "chat", "image_pipeline",
     "workspace",
+    # Modular tools added in feat/mcp-tools-expansion
+    "ssh", "monitor", "git", "notify", "iot", "log",
 }
 
 # Non-mega tools — use their own schema (not the mega-tool action pattern)
 # workspace is dispatched via a dedicated if-block (like chat/image_pipeline), not via _MEGA_TOOL_MAP
-_STANDALONE_TOOLS = {"chat", "image_pipeline", "workspace"}
+# The 6 new modular tools (ssh, monitor, git, notify, iot, log) register via TOOL_HANDLERS
+# and are excluded from the _MEGA_TOOL_MAP dispatch path.
+_STANDALONE_TOOLS = {"chat", "image_pipeline", "workspace", "ssh", "monitor", "git", "notify", "iot", "log"}
 
 # Expected actions per mega-tool (minimum set that must exist)
 _EXPECTED_ACTIONS = {
@@ -99,10 +103,10 @@ _CRITICAL_HANDLERS = {
 
 @skip_load
 class TestToolCount:
-    def test_exactly_19_tools(self):
-        """Platform must expose exactly 19 tools (16 mega + chat + image_pipeline + workspace)."""
+    def test_exactly_25_tools(self):
+        """Platform must expose exactly 25 tools (16 mega + chat + image_pipeline + workspace + 6 new modular)."""
         count = len(_TOOLS)
-        assert count == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {count}."
+        assert count == 25, f"Expected 25 tools (19 original + ssh/monitor/git/notify/iot/log), got {count}."
 
     def test_no_duplicate_names(self):
         """Every tool name must be unique."""
@@ -219,6 +223,56 @@ class TestSchemaContracts:
                 continue
             required = t.get("inputSchema", {}).get("required", [])
             assert "action" in required, f"Tool '{t['name']}' must require action"
+
+    # ------------------------------------------------------------------
+    # New modular tool schema contracts
+    # ------------------------------------------------------------------
+
+    def test_ssh_has_action(self):
+        props = self._schema("ssh").get("properties", {})
+        assert "action" in props, "ssh must have action property"
+        assert "host" in props, "ssh must have host property"
+
+    def test_monitor_has_action(self):
+        props = self._schema("monitor").get("properties", {})
+        assert "action" in props, "monitor must have action property"
+
+    def test_git_has_action(self):
+        props = self._schema("git").get("properties", {})
+        assert "action" in props, "git must have action property"
+        assert "repo" in props, "git must have repo property"
+
+    def test_notify_has_action(self):
+        props = self._schema("notify").get("properties", {})
+        assert "action" in props, "notify must have action property"
+        assert "text" in props, "notify must have text property"
+
+    def test_iot_has_action(self):
+        props = self._schema("iot").get("properties", {})
+        assert "action" in props, "iot must have action property"
+        assert "device" in props, "iot must have device property"
+
+    def test_log_has_action(self):
+        props = self._schema("log").get("properties", {})
+        assert "action" in props, "log must have action property"
+        assert "pattern" in props, "log must have pattern property"
+
+    def test_new_tools_have_descriptions(self):
+        """All 6 new modular tools must have a non-empty description with an Actions: section."""
+        new_tools = {"ssh", "monitor", "git", "notify", "iot", "log"}
+        for t in _TOOLS:
+            if t["name"] not in new_tools:
+                continue
+            desc = t.get("description", "")
+            assert desc.strip(), f"Tool '{t['name']}' has empty description"
+            assert "Actions:" in desc, f"Tool '{t['name']}' description missing 'Actions:' section"
+
+    def test_no_duplicate_tool_names(self):
+        """No tool names may appear more than once in _TOOLS."""
+        names = [t["name"] for t in _TOOLS]
+        seen: set[str] = set()
+        dupes = [n for n in names if n in seen or seen.add(n)]  # type: ignore[func-returns-value]
+        assert not dupes, f"Duplicate tool names in _TOOLS: {dupes}"
 
 
 @skip_load
