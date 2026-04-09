@@ -20,6 +20,7 @@ The container reaches the host via host.docker.internal. Bare hostnames
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -46,9 +47,9 @@ _HOST_ALIASES: dict[str, str] = {
     "amarillo": "host.docker.internal",
 }
 
-_SSH_KEY: str = "/app/.ssh/team_key"
-_SSH_USER: str = "jalsarraf"
-_SSH_PORT: int = 22
+_SSH_KEY: str = os.environ.get("TEAM_SSH_KEY", "/app/.ssh/team_key")
+_SSH_USER: str = os.environ.get("TEAM_SSH_USER", "jalsarraf")
+_SSH_PORT: int = int(os.environ.get("TEAM_SSH_PORT", "22"))
 
 _SSH_FLAGS: list[str] = [
     "-i", _SSH_KEY,
