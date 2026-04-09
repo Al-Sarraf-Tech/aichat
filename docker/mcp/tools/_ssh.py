@@ -37,7 +37,6 @@ _DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
         "amarillo",
         "dominus",
         "sentinel",
-        "superemus",
         "host.docker.internal",
         "192.168.50.2",
     }
@@ -47,6 +46,12 @@ _DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
 _HOST_ALIASES: dict[str, str] = {
     "amarillo": "host.docker.internal",
     "dominus": "192.168.50.2",
+}
+
+# Per-host SSH port overrides (hosts not listed use _SSH_PORT default)
+_HOST_PORTS: dict[str, int] = {
+    "dominus": 22,
+    "192.168.50.2": 22,
 }
 
 _SSH_KEY: str = os.environ.get("TEAM_SSH_KEY", "/app/.ssh/team_key")
@@ -311,7 +316,8 @@ class SSHExecutor:
             )
 
         target = self._resolve_host(host)
-        effective_port = port if port is not None else self._port
+        # Per-host port override, then explicit port arg, then default
+        effective_port = port if port is not None else _HOST_PORTS.get(host, _HOST_PORTS.get(target, self._port))
         port_flags = ["-p", str(effective_port)]
         user_host = f"{self._user}@{target}"
         cmd_args = ["ssh", *_SSH_FLAGS, *port_flags, user_host, command]

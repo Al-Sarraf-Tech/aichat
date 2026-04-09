@@ -29,7 +29,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 
 THERMAL_WARN_C: float = 85.0
 DISK_WARN_PCT: int = 85
-FLEET_HOSTS: list[str] = ["amarillo", "dominus", "sentinel", "superemus"]
+FLEET_HOSTS: list[str] = ["amarillo", "dominus", "sentinel"]
 
 # Services to health-check (name, URL)
 _SERVICES: list[tuple[str, str]] = [
@@ -101,16 +101,24 @@ def _parse_temps(sensors_json: str) -> list[tuple[str, float]]:
     if not isinstance(data, dict):
         return results
 
+    # Chips/features to skip (noise: board sensors with bogus values)
+    _SKIP_FEATURES = {"AUXTIN", "PECI", "PCH", "Calibration"}
+
     for chip_name, chip_data in data.items():
         if not isinstance(chip_data, dict):
             continue
         for feature_name, feature_data in chip_data.items():
             if not isinstance(feature_data, dict):
                 continue
+            # Skip noisy board sensor features
+            if any(skip in feature_name for skip in _SKIP_FEATURES):
+                continue
             for subkey, value in feature_data.items():
                 # Only temp*_input fields are actual temperatures.
-                # Skip fan*_input (RPM), in*_input (voltage), energy*_input, etc.
                 if subkey.startswith("temp") and subkey.endswith("_input") and isinstance(value, (int, float)):
+                    # Skip obviously bogus values (negative or > 150C)
+                    if value < -40 or value > 150:
+                        continue
                     label = f"{chip_name}/{feature_name}"
                     results.append((label, float(value)))
 
@@ -163,6 +171,11 @@ def _parse_df(df_output: str) -> list[tuple[str, int]]:
                     mount_field = parts[i + 1]
                 break
         if pct_field is not None and mount_field is not None:
+            # Skip virtual/pseudo filesystems
+            _SKIP_MOUNTS = ("/dev", "/dev/shm", "/run", "/sys", "/proc",
+                            "/run/credentials", "/run/user")
+            if any(mount_field == s or mount_field.startswith(s + "/") for s in _SKIP_MOUNTS):
+                continue
             try:
                 pct = int(pct_field.rstrip("%"))
                 results.append((mount_field, pct))
@@ -432,10 +445,13 @@ async def _overview(ssh: SSHExecutor) -> str:
         if nproc.isdigit():
             lines.append(f"  CPUs: {nproc}")
 
-    # Containers on amarillo
+    # Containers on amarillo — summary + flagged only
     containers_r: SSHResult = await ssh.run("amarillo", "docker ps --format json")
     lines.append("\n--- Containers (amarillo) ---")
     if containers_r.returncode == 0 and containers_r.stdout.strip():
+        total = 0
+        healthy = 0
+        flagged: list[str] = []
         for raw_line in containers_r.stdout.splitlines():
             raw_line = raw_line.strip()
             if not raw_line:
@@ -444,9 +460,18 @@ async def _overview(ssh: SSHExecutor) -> str:
                 obj = json.loads(raw_line)
                 name = obj.get("Names", obj.get("Name", "?"))
                 status = obj.get("Status", "?")
-                lines.append(f"  {name}  —  {status}")
+                total += 1
+                status_lower = status.lower()
+                if "healthy" in status_lower and "unhealthy" not in status_lower:
+                    healthy += 1
+                if "unhealthy" in status_lower or "restarting" in status_lower or "exited" in status_lower:
+                    flagged.append(f"  {name}: {status}")
             except json.JSONDecodeError:
-                lines.append(f"  {raw_line}")
+                pass
+        lines.append(f"  {total} running, {healthy} healthy")
+        if flagged:
+            lines.append("  Issues:")
+            lines.extend(flagged)
     else:
         lines.append("  (none or unreachable)")
 

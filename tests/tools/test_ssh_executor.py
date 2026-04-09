@@ -27,7 +27,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 # Helpers / constants
 # ===========================================================================
 
-_DEFAULT_ALLOWED = {"amarillo", "dominus", "sentinel", "superemus", "host.docker.internal"}
+_DEFAULT_ALLOWED = {"amarillo", "dominus", "sentinel", "host.docker.internal", "192.168.50.2"}
 
 
 # ===========================================================================
