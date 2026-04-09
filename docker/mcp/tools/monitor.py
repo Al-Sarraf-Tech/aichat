@@ -27,7 +27,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 # Constants
 # ---------------------------------------------------------------------------
 
-THERMAL_WARN_C: float = 85.0
+THERMAL_WARN_C: float = 90.0
 DISK_WARN_PCT: int = 85
 FLEET_HOSTS: list[str] = ["amarillo", "dominus"]
 
