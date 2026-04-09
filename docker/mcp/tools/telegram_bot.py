@@ -505,6 +505,7 @@ async def _stream_claude(
     heartbeat_task = asyncio.create_task(_heartbeat())
 
     try:
+        assert proc.stdout is not None, "subprocess stdout must be PIPE"
         while True:
             line_bytes = await proc.stdout.readline()
             if not line_bytes:
