@@ -214,7 +214,7 @@ async def _upload(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            _, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
@@ -271,7 +271,7 @@ async def _download(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, An
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            _, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
