@@ -73,16 +73,16 @@ async def _send_telegram(text: str, reply_to: int | None = None) -> None:
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(url, json=payload)
-        if resp.status_code == 400:
-            # Markdown parse failure — retry without parse_mode
-            payload.pop("parse_mode", None)
-            resp = await client.post(url, json=payload)
-        if resp.status_code != 200:
-            logger.error("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
+            if resp.status_code == 400:
+                # Markdown parse failure — retry without parse_mode
+                payload.pop("parse_mode", None)
+                resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                logger.error("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
     except Exception as exc:  # noqa: BLE001
-        logger.error("_send_telegram error: %s", exc)
+        logger.error("_send_telegram error: %r", exc)
 
 
 async def _get_updates(offset: int) -> list[dict[str, Any]]:
