@@ -288,3 +288,58 @@ class TestClassifyIntent:
 
         assert intent.type == "question"
         assert intent.text == "anything"
+
+
+# ===========================================================================
+# Task 3: Auth gate + poll loop — 3 tests
+# ===========================================================================
+
+
+class TestIsAuthorized:
+    """_is_authorized checks message.chat.id against _CHAT_ID."""
+
+    def test_authorized_correct_id_returns_true(self):
+        """Message from the configured chat ID must be authorized."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        message = {"chat": {"id": 123456}, "text": "hi", "message_id": 1}
+        assert tb._is_authorized(message) is True
+
+    def test_authorized_wrong_id_returns_false(self):
+        """Message from a different chat ID must not be authorized."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        message = {"chat": {"id": 999999}, "text": "hi", "message_id": 1}
+        assert tb._is_authorized(message) is False
+
+
+class TestHandleMessage:
+    """_handle_message dispatches to the correct handler based on intent."""
+
+    @pytest.mark.asyncio
+    async def test_handle_message_dispatches_tool_intent(self):
+        """_handle_message must call _dispatch_tool for a tool intent."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        message = {"chat": {"id": 123456}, "text": "show fleet overview", "message_id": 42}
+
+        tool_intent = tb.Intent(type="tool", tool="monitor", action="overview")
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch.object(tb, "_classify_intent", AsyncMock(return_value=tool_intent)), \
+             patch.object(tb, "_send_telegram", AsyncMock()), \
+             patch.object(tb, "_dispatch_tool", AsyncMock()) as mock_dispatch:
+            await tb._handle_message(message)
+
+        mock_dispatch.assert_called_once()
+        call_args = mock_dispatch.call_args
+        assert call_args[0][0].type == "tool"

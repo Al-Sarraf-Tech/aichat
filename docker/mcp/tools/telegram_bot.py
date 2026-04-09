@@ -248,3 +248,146 @@ async def _classify_intent(message: str) -> Intent:
     except Exception as exc:  # noqa: BLE001
         logger.warning("_classify_intent error (%s), falling back to question", exc)
         return Intent(type="question", text=message)
+
+
+# ---------------------------------------------------------------------------
+# Poll loop + auth gate
+# ---------------------------------------------------------------------------
+
+# State: pending "which repo?" follow-ups keyed by message_id that asked
+_pending_code: dict[int, Intent] = {}
+
+
+def _is_authorized(message: dict[str, Any]) -> bool:
+    """Return True if the message originates from the configured chat ID."""
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", _CHAT_ID)
+    return str(message.get("chat", {}).get("id", "")) == str(chat_id)
+
+
+async def _handle_message(message: dict[str, Any]) -> None:
+    """Parse and dispatch a single inbound Telegram message."""
+    text: str = (message.get("text") or "").strip()
+    msg_id: int = message.get("message_id", 0)
+
+    if not text:
+        return
+
+    # Check if this is a reply to a "which repo?" prompt
+    if msg_id in _pending_code:
+        intent = _pending_code.pop(msg_id)
+        intent.repo = text
+        await _dispatch_code(intent, reply_to=msg_id)
+        return
+
+    # Also check if any pending code intent is waiting for a repo answer
+    # (user typed the repo name as a follow-up without replying)
+    for pending_msg_id, pending_intent in list(_pending_code.items()):
+        if pending_intent.repo is None:
+            _pending_code.pop(pending_msg_id)
+            pending_intent.repo = text
+            await _dispatch_code(pending_intent, reply_to=msg_id)
+            return
+
+    # Keyword shortcuts
+    lower = text.lower()
+    if lower in ("status", "/status"):
+        await _dispatch_status(reply_to=msg_id)
+        return
+    if lower in ("cancel", "/cancel"):
+        await _dispatch_cancel(reply_to=msg_id)
+        return
+
+    # Acknowledge receipt
+    await _send_telegram("Got it -- classifying...", reply_to=msg_id)
+
+    intent = await _classify_intent(text)
+
+    if intent.type == "tool":
+        await _dispatch_tool(intent, reply_to=msg_id)
+    elif intent.type == "code":
+        if not intent.repo:
+            # Need to know which repo — ask and store pending
+            ask_msg_id = msg_id + 1  # approximate; updated when we get the real reply
+            _pending_code[ask_msg_id] = intent
+            await _send_telegram("Which repo?", reply_to=msg_id)
+        else:
+            await _dispatch_code(intent, reply_to=msg_id)
+    elif intent.type == "create":
+        await _dispatch_create(intent, reply_to=msg_id)
+    else:
+        await _dispatch_question(intent, reply_to=msg_id)
+
+
+async def poll_loop() -> None:
+    """Main Telegram long-poll loop.
+
+    Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from environment at
+    start time.  If either is missing, logs a warning and returns immediately.
+
+    On error: logs, sleeps 5 s, retries.
+    On CancelledError: exits cleanly.
+    """
+    import asyncio
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", _TOKEN)
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", _CHAT_ID)
+
+    if not token or not chat_id:
+        logger.warning(
+            "poll_loop: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — not starting"
+        )
+        return
+
+    logger.info("Telegram poll_loop starting (chat_id=%s)", chat_id)
+    offset = 0
+
+    while True:
+        try:
+            updates = await _get_updates(offset)
+            for update in updates:
+                offset = update["update_id"] + 1
+                message = update.get("message")
+                if not message:
+                    continue
+                if not _is_authorized(message):
+                    logger.info(
+                        "Ignoring message from unauthorized chat_id=%s",
+                        message.get("chat", {}).get("id"),
+                    )
+                    continue
+                asyncio.create_task(_handle_message(message))
+        except asyncio.CancelledError:
+            logger.info("poll_loop cancelled — exiting")
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.error("poll_loop error: %s — retrying in 5s", exc)
+            await asyncio.sleep(5)
+
+
+# ---------------------------------------------------------------------------
+# Stub dispatchers (implemented in Tasks 4-5)
+# ---------------------------------------------------------------------------
+
+
+async def _dispatch_tool(intent: Intent, reply_to: int | None = None) -> None:
+    await _send_telegram("Tool dispatch not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_code(intent: Intent, reply_to: int | None = None) -> None:
+    await _send_telegram("Code dispatch not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_create(intent: Intent, reply_to: int | None = None) -> None:
+    await _send_telegram("Create dispatch not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_question(intent: Intent, reply_to: int | None = None) -> None:
+    await _send_telegram("Question handler not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_status(reply_to: int | None = None) -> None:
+    await _send_telegram("Status not yet implemented", reply_to=reply_to)
+
+
+async def _dispatch_cancel(reply_to: int | None = None) -> None:
+    await _send_telegram("Cancel not yet implemented", reply_to=reply_to)
