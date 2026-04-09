@@ -320,7 +320,7 @@ async def _prs(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]]:
             f"for d in $HOME/git/*/; do "
             f"  name=$(basename \"$d\"); "
             f"  if [ -d \"$d/.git\" ]; then "
-            f"    prs=$(gh -R . pr list --limit {limit} 2>/dev/null); "
+            f"    prs=$(cd \"$d\" && gh pr list --limit {limit} 2>/dev/null); "
             f"    if [ -n \"$prs\" ]; then "
             f"      echo \"=== $name ===\"; echo \"$prs\"; echo; "
             f"    fi; "

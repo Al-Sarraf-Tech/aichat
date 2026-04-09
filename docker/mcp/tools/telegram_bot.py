@@ -266,6 +266,9 @@ async def _classify_intent(message: str) -> Intent:
 # State: pending "which repo?" follow-ups keyed by chat_id
 _pending_code: dict[int, Intent] = {}
 
+# Fire-and-forget tasks created by poll_loop — kept alive to prevent GC cancellation
+_background_tasks: set[asyncio.Task] = set()
+
 
 def _is_authorized(message: dict[str, Any]) -> bool:
     """Return True if the message originates from the configured chat ID."""
@@ -310,6 +313,12 @@ async def _handle_message(message: dict[str, Any]) -> None:
         if not intent.repo:
             # Need to know which repo — ask and store pending keyed by chat_id
             chat_id = message.get("chat", {}).get("id", 0)
+            if chat_id in _pending_code:
+                await _send_telegram(
+                    "You already have a pending task waiting for a repo name. Send the repo name first.",
+                    reply_to=msg_id,
+                )
+                return
             _pending_code[chat_id] = intent
             await _send_telegram("Which repo?", reply_to=msg_id)
         else:
@@ -355,7 +364,9 @@ async def poll_loop() -> None:
                         message.get("chat", {}).get("id"),
                     )
                     continue
-                asyncio.create_task(_handle_message(message))
+                task = asyncio.create_task(_handle_message(message))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
         except asyncio.CancelledError:
             logger.info("poll_loop cancelled — exiting")
             return
@@ -489,14 +500,14 @@ async def _stream_claude(
     edited_files: list[str] = []
     last_bash_output: str = ""
     final_text: str = ""
-    milestone_fired = False
+    last_milestone_time = time.monotonic()
 
     async def _heartbeat() -> None:
-        nonlocal milestone_fired
+        nonlocal last_milestone_time
         try:
             while True:
                 await asyncio.sleep(90)
-                if not milestone_fired:
+                if time.monotonic() - last_milestone_time > 90:
                     await _send_telegram(
                         f"Still working on: {task_state.description}...",
                         reply_to=reply_to,
@@ -534,7 +545,7 @@ async def _stream_claude(
 
                 if tool_name in ("Read", "Glob", "Grep") and "Reading codebase..." not in seen_milestones:
                     seen_milestones.add("Reading codebase...")
-                    milestone_fired = True
+                    last_milestone_time = time.monotonic()
                     await _send_telegram("Reading codebase...", reply_to=reply_to)
 
                 elif tool_name in ("Edit", "Write"):
@@ -543,7 +554,7 @@ async def _stream_claude(
                         edited_files.append(fp)
                     if "Writing code..." not in seen_milestones:
                         seen_milestones.add("Writing code...")
-                        milestone_fired = True
+                        last_milestone_time = time.monotonic()
                         await _send_telegram("Writing code...", reply_to=reply_to)
 
                 elif tool_name == "Bash":
@@ -552,12 +563,12 @@ async def _stream_claude(
                     if any(p in bash_cmd for p in test_patterns):
                         if "Running tests..." not in seen_milestones:
                             seen_milestones.add("Running tests...")
-                            milestone_fired = True
+                            last_milestone_time = time.monotonic()
                             await _send_telegram("Running tests...", reply_to=reply_to)
                     elif "git commit" in bash_cmd:
                         if "Committing..." not in seen_milestones:
                             seen_milestones.add("Committing...")
-                            milestone_fired = True
+                            last_milestone_time = time.monotonic()
                             await _send_telegram("Committing...", reply_to=reply_to)
 
             elif event_type == "tool_result":
@@ -611,7 +622,7 @@ async def _dispatch_code(intent: Intent, reply_to: int | None = None) -> None:
 
     escaped_task = description.replace("'", "'\\''")
     ssh_command = (
-        f"cd $HOME/git/{repo} && "
+        f'cd "$HOME/git/{repo}" && '
         f"claude --output-format stream-json --dangerously-skip-permissions -p '{escaped_task}'"
     )
 
@@ -665,7 +676,7 @@ async def _dispatch_create(intent: Intent, reply_to: int | None = None) -> None:
     )
     escaped_prompt = scaffolding_prompt.replace("'", "'\\''")
     ssh_command = (
-        f"mkdir -p $HOME/git/{name} && cd $HOME/git/{name} && git init 2>/dev/null; "
+        f'mkdir -p "$HOME/git/{name}" && cd "$HOME/git/{name}" && git init 2>/dev/null; '
         f"claude --output-format stream-json --dangerously-skip-permissions -p '{escaped_prompt}'"
     )
 
