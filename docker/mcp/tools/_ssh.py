@@ -230,12 +230,19 @@ class SSHExecutor:
     # run()
     # ------------------------------------------------------------------
 
-    async def run(self, host: str, command: str) -> SSHResult:
+    async def run(self, host: str, command: str, timeout: float = 30.0) -> SSHResult:
         """Run *command* on *host* via SSH.
 
         Raises:
             ValueError: if the host is not in the allowlist.
             RuntimeError: if the circuit breaker is open for this host.
+
+        Args:
+            host: Target host name (must be in the allowlist).
+            command: Shell command to execute on the remote host.
+            timeout: Seconds to wait for the command to complete (default 30.0).
+                     On timeout the subprocess is killed and a circuit breaker
+                     failure is recorded.
 
         Returns:
             SSHResult with stdout, stderr, returncode, host, and elapsed time.
@@ -258,7 +265,22 @@ class SSHExecutor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout_bytes, stderr_bytes = await proc.communicate()
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                elapsed = time.monotonic() - start
+                self._record_failure(host)
+                return SSHResult(
+                    stdout="",
+                    stderr=f"Command timed out after {timeout}s",
+                    returncode=-1,
+                    host=host,
+                    elapsed=elapsed,
+                )
             elapsed = time.monotonic() - start
 
             returncode = proc.returncode if proc.returncode is not None else -1
@@ -292,12 +314,18 @@ class SSHExecutor:
     # ------------------------------------------------------------------
 
     async def run_multi(
-        self, hosts: list[str], command: str
+        self, hosts: list[str], command: str, timeout: float = 30.0
     ) -> dict[str, SSHResult]:
         """Run *command* on multiple *hosts* concurrently via asyncio.gather.
 
         Individual host failures are captured and returned as SSHResult entries
         with returncode=-1; the method itself never raises.
+
+        Args:
+            hosts: List of host names to run the command on concurrently.
+            command: Shell command to execute on each remote host.
+            timeout: Per-host timeout in seconds passed through to run()
+                     (default 30.0).
 
         Returns:
             Dict mapping host name to SSHResult.
@@ -305,7 +333,7 @@ class SSHExecutor:
 
         async def _safe_run(host: str) -> tuple[str, SSHResult]:
             try:
-                result = await self.run(host, command)
+                result = await self.run(host, command, timeout=timeout)
             except Exception as exc:
                 result = SSHResult(
                     stdout="",

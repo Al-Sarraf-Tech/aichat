@@ -28,5 +28,7 @@ def register(
         handler: Async callable that implements the tool.
     """
     name = schema["name"]
+    if name in TOOL_HANDLERS:
+        raise ValueError(f"Tool {name!r} already registered")
     TOOL_SCHEMAS.append(schema)
     TOOL_HANDLERS[name] = handler

@@ -7,9 +7,7 @@ _ssh.py exists (e.g. during the "red" TDD phase).
 """
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
