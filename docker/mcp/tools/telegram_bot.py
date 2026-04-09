@@ -94,7 +94,7 @@ async def _get_updates(offset: int) -> list[dict[str, Any]]:
         "allowed_updates": ["message"],
     }
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=35) as client:
             resp = await client.get(url, params=params)
         data = resp.json()
         if data.get("ok"):
@@ -102,7 +102,7 @@ async def _get_updates(offset: int) -> list[dict[str, Any]]:
         logger.warning("getUpdates not ok: %s", data)
         return []
     except Exception as exc:  # noqa: BLE001
-        logger.error("_get_updates error: %s", exc)
+        logger.error("_get_updates error: %r", exc)
         return []
 
 
