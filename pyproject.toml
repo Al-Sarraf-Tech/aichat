@@ -41,6 +41,7 @@ markers = [
   "mega_tools: tests for the mega-tool consolidation layer",
   "unit: unit tests — no Docker, no network required",
   "integration: integration tests — requires Docker stack running",
+  "e2e: end-to-end tests via live MCP JSON-RPC endpoint",
 ]
 
 [tool.ruff]
