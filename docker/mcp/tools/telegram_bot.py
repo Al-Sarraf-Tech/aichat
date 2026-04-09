@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 _TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 _CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
-_BASE_URL: str = f"https://api.telegram.org/bot{_TOKEN}"
 _LM_STUDIO_URL: str = os.environ.get("IMAGE_GEN_BASE_URL", "http://192.168.50.2:1234")
 _MAX_MSG_LEN: int = 4096
 _SSH_HOST: str = os.environ.get("TEAM_SSH_HOST", "host.docker.internal")
@@ -419,8 +418,9 @@ def _build_summary(
 
     # Extract description from final_text (truncated to 300 chars)
     description = final_text.strip()[:300] if final_text.strip() else task_state.description
+    status_word = "Done" if returncode == 0 else f"Failed (exit {returncode})"
 
-    parts = [f"Done -- {repo_label} ({elapsed}s)", "", description]
+    parts = [f"{status_word} -- {repo_label} ({elapsed}s)", "", description]
 
     if edited_files:
         unique_names = ", ".join(
