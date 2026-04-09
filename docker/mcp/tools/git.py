@@ -204,7 +204,10 @@ async def _log(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]]:
     if err:
         return _text(err)
 
-    limit: int = int(args.get("limit", 10))
+    try:
+        limit: int = min(int(args.get("limit", 10)), 50)
+    except (ValueError, TypeError):
+        limit = 10
     cmd = (
         f"cd {GIT_BASE}/{_shell_quote(repo)} && "
         f"git log --oneline -n {limit}"
@@ -255,7 +258,10 @@ async def _ci(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]]:
     if err:
         return _text(err)
 
-    limit: int = int(args.get("limit", 10))
+    try:
+        limit: int = min(int(args.get("limit", 10)), 50)
+    except (ValueError, TypeError):
+        limit = 10
     cmd = (
         f"cd {GIT_BASE}/{_shell_quote(repo)} && "
         f"gh run list --limit {limit}"
@@ -295,7 +301,10 @@ async def _trigger_ci(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, 
 
 async def _prs(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]]:
     repo: str | None = args.get("repo")
-    limit: int = int(args.get("limit", 10))
+    try:
+        limit: int = min(int(args.get("limit", 10)), 50)
+    except (ValueError, TypeError):
+        limit = 10
 
     if repo:
         err = _validate_repo(repo)
@@ -437,7 +446,10 @@ async def _issues(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]
         cmd = " && ".join(cmd_parts)
     else:
         # List issues
-        limit: int = int(args.get("limit", 20))
+        try:
+            limit: int = min(int(args.get("limit", 20)), 50)
+        except (ValueError, TypeError):
+            limit = 20
         cmd = (
             f"cd {GIT_BASE}/{_shell_quote(repo)} && "
             f"gh issue list --limit {limit}"

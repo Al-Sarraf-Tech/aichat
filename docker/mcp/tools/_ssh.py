@@ -274,7 +274,13 @@ class SSHExecutor:
     # run()
     # ------------------------------------------------------------------
 
-    async def run(self, host: str, command: str, timeout: float = 30.0) -> SSHResult:
+    async def run(
+        self,
+        host: str,
+        command: str,
+        timeout: float = 30.0,
+        port: int | None = None,
+    ) -> SSHResult:
         """Run *command* on *host* via SSH.
 
         Raises:
@@ -287,6 +293,8 @@ class SSHExecutor:
             timeout: Seconds to wait for the command to complete (default 30.0).
                      On timeout the subprocess is killed and a circuit breaker
                      failure is recorded.
+            port: Override the SSH port (default: 22). Useful for devices like
+                  Shield TV that listen on a non-standard port (e.g. 8022).
 
         Returns:
             SSHResult with stdout, stderr, returncode, host, and elapsed time.
@@ -300,7 +308,8 @@ class SSHExecutor:
             )
 
         target = self._resolve_host(host)
-        cmd_args = ["ssh", *_SSH_FLAGS, target, command]
+        port_flags = ["-p", str(port)] if port is not None else []
+        cmd_args = ["ssh", *_SSH_FLAGS, *port_flags, target, command]
 
         start = time.monotonic()
         try:
@@ -358,7 +367,11 @@ class SSHExecutor:
     # ------------------------------------------------------------------
 
     async def run_multi(
-        self, hosts: list[str], command: str, timeout: float = 30.0
+        self,
+        hosts: list[str],
+        command: str,
+        timeout: float = 30.0,
+        port: int | None = None,
     ) -> dict[str, SSHResult]:
         """Run *command* on multiple *hosts* concurrently via asyncio.gather.
 
@@ -370,6 +383,7 @@ class SSHExecutor:
             command: Shell command to execute on each remote host.
             timeout: Per-host timeout in seconds passed through to run()
                      (default 30.0).
+            port: Override the SSH port for all hosts (default: 22).
 
         Returns:
             Dict mapping host name to SSHResult.
@@ -377,7 +391,7 @@ class SSHExecutor:
 
         async def _safe_run(host: str) -> tuple[str, SSHResult]:
             try:
-                result = await self.run(host, command, timeout=timeout)
+                result = await self.run(host, command, timeout=timeout, port=port)
             except Exception as exc:
                 result = SSHResult(
                     stdout="",

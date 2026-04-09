@@ -77,7 +77,7 @@ SCHEMA: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
-def _text_result(msg: str) -> list[dict[str, Any]]:
+def _text(msg: str) -> list[dict[str, Any]]:
     return [{"type": "text", "text": msg}]
 
 
@@ -104,14 +104,14 @@ async def _post_json(
         resp = await client.post(url, json=payload)
 
     if resp.status_code == 429:
-        return _text_result(f"Rate limited (429): {resp.json().get('description', 'Too Many Requests')}")
+        return _text(f"Rate limited (429): {resp.json().get('description', 'Too Many Requests')}")
 
     data = resp.json()
     if not data.get("ok"):
-        return _text_result(f"Telegram error: {data.get('description', 'unknown error')}")
+        return _text(f"Telegram error: {data.get('description', 'unknown error')}")
 
     msg_id = data.get("result", {}).get("message_id", "?")
-    return _text_result(f"Message sent (id={msg_id})")
+    return _text(f"Message sent (id={msg_id})")
 
 
 async def _post_multipart(
@@ -127,7 +127,7 @@ async def _post_multipart(
         with open(file_path, "rb") as fh:
             file_bytes = fh.read()
     except OSError as exc:
-        return _text_result(f"Cannot open file {file_path!r}: {exc}")
+        return _text(f"Cannot open file {file_path!r}: {exc}")
 
     # Build multipart dict: {field: (filename, bytes, mime)} for the file,
     # and plain strings for all other fields.
@@ -143,14 +143,14 @@ async def _post_multipart(
         resp = await client.post(url, files=multipart)
 
     if resp.status_code == 429:
-        return _text_result(f"Rate limited (429): {resp.json().get('description', 'Too Many Requests')}")
+        return _text(f"Rate limited (429): {resp.json().get('description', 'Too Many Requests')}")
 
     data = resp.json()
     if not data.get("ok"):
-        return _text_result(f"Telegram error: {data.get('description', 'unknown error')}")
+        return _text(f"Telegram error: {data.get('description', 'unknown error')}")
 
     msg_id = data.get("result", {}).get("message_id", "?")
-    return _text_result(f"File sent (id={msg_id})")
+    return _text(f"File sent (id={msg_id})")
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ async def _post_multipart(
 async def _handle_send(args: dict[str, Any], token: str, chat_id: str) -> list[dict[str, Any]]:
     text = args.get("text", "").strip()
     if not text:
-        return _text_result("Missing required parameter: 'text'")
+        return _text("Missing required parameter: 'text'")
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -173,7 +173,7 @@ async def _handle_send(args: dict[str, Any], token: str, chat_id: str) -> list[d
 async def _handle_send_alert(args: dict[str, Any], token: str, chat_id: str) -> list[dict[str, Any]]:
     text = args.get("text", "").strip()
     if not text:
-        return _text_result("Missing required parameter: 'text'")
+        return _text("Missing required parameter: 'text'")
 
     severity = args.get("severity", "info").lower()
     icon = _SEVERITY_ICONS.get(severity, _SEVERITY_ICONS["info"])
@@ -194,7 +194,7 @@ async def _handle_send_photo(args: dict[str, Any], token: str, chat_id: str) -> 
     caption = args.get("caption", "")
 
     if not path and not url:
-        return _text_result("Missing required parameter: 'path' or 'url'")
+        return _text("Missing required parameter: 'path' or 'url'")
 
     if url:
         # Telegram fetches the image directly from the URL
@@ -209,7 +209,7 @@ async def _handle_send_photo(args: dict[str, Any], token: str, chat_id: str) -> 
 
     # File upload path
     if not path.startswith(_WORKSPACE_PREFIX):
-        return _text_result(
+        return _text(
             f"File path must start with {_WORKSPACE_PREFIX!r}. Got: {path!r}"
         )
     fields: dict[str, Any] = {"chat_id": chat_id, "parse_mode": "Markdown"}
@@ -223,10 +223,10 @@ async def _handle_send_document(args: dict[str, Any], token: str, chat_id: str) 
     caption = args.get("caption", "")
 
     if not path:
-        return _text_result("Missing required parameter: 'path'")
+        return _text("Missing required parameter: 'path'")
 
     if not path.startswith(_WORKSPACE_PREFIX):
-        return _text_result(
+        return _text(
             f"File path must start with {_WORKSPACE_PREFIX!r}. Got: {path!r}"
         )
     fields: dict[str, Any] = {"chat_id": chat_id, "parse_mode": "Markdown"}
@@ -247,12 +247,12 @@ async def handle(args: dict[str, Any], **_kwargs: Any) -> list[dict[str, Any]]:
     """
     action = args.get("action", "")
     if not action:
-        return _text_result("Missing required parameter: 'action'")
+        return _text("Missing required parameter: 'action'")
 
     # Credential check — required for all actions
     creds = _get_credentials()
     if creds is None:
-        return _text_result(
+        return _text(
             "Missing Telegram credentials: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID env vars"
         )
     token, chat_id = creds
@@ -266,7 +266,7 @@ async def handle(args: dict[str, Any], **_kwargs: Any) -> list[dict[str, Any]]:
     if action == "send_document":
         return await _handle_send_document(args, token, chat_id)
 
-    return _text_result(f"Unknown action: {action!r}. Valid: send, send_alert, send_photo, send_document")
+    return _text(f"Unknown action: {action!r}. Valid: send, send_alert, send_photo, send_document")
 
 
 # ---------------------------------------------------------------------------
