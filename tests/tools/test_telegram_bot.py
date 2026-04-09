@@ -146,3 +146,145 @@ class TestGetUpdates:
             result = await tb._get_updates(0)
 
         assert result == []
+
+
+# ===========================================================================
+# Task 2: Intent classifier — 6 tests
+# ===========================================================================
+
+
+def _lm_response(content: str) -> MagicMock:
+    """Build a fake LM Studio chat completion response."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "choices": [{"message": {"content": content}}]
+    }
+    return resp
+
+
+class TestClassifyIntent:
+    """_classify_intent uses LM Studio to determine intent type."""
+
+    @pytest.mark.asyncio
+    async def test_tool_intent_parsed(self):
+        """tool intent with action=monitor/overview must be parsed correctly."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        tool_json = json.dumps({"type": "tool", "tool": "monitor", "action": "overview", "args": {}})
+        client = _make_mock_client(post_json=None)
+        client.post.return_value = _lm_response(tool_json)
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("show me the fleet overview")
+
+        assert intent.type == "tool"
+        assert intent.tool == "monitor"
+        assert intent.action == "overview"
+
+    @pytest.mark.asyncio
+    async def test_code_intent_parsed(self):
+        """code intent must parse repo and task correctly."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        code_json = json.dumps({"type": "code", "repo": "aichat", "task": "add logging to main.py"})
+        client = _make_mock_client()
+        client.post.return_value = _lm_response(code_json)
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("add logging to main.py in aichat")
+
+        assert intent.type == "code"
+        assert intent.repo == "aichat"
+        assert "logging" in intent.task
+
+    @pytest.mark.asyncio
+    async def test_create_intent_parsed(self):
+        """create intent must parse name, description, and language."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        create_json = json.dumps({
+            "type": "create",
+            "name": "ssh-keytool",
+            "description": "a rust cli for managing ssh keys",
+            "language": "rust",
+        })
+        client = _make_mock_client()
+        client.post.return_value = _lm_response(create_json)
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("make me a rust cli for ssh keys")
+
+        assert intent.type == "create"
+        assert intent.name == "ssh-keytool"
+        assert intent.language == "rust"
+
+    @pytest.mark.asyncio
+    async def test_question_intent_parsed(self):
+        """question intent must populate the text field."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        q_json = json.dumps({"type": "question", "text": "what is the qdrant port?"})
+        client = _make_mock_client()
+        client.post.return_value = _lm_response(q_json)
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("what is the qdrant port?")
+
+        assert intent.type == "question"
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_returns_question_fallback(self):
+        """Malformed JSON from LM Studio must return Intent(type='question')."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        client = _make_mock_client()
+        client.post.return_value = _lm_response("not valid json at all!!!")
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("something weird")
+
+        assert intent.type == "question"
+        assert intent.text == "something weird"
+
+    @pytest.mark.asyncio
+    async def test_network_error_returns_question_fallback(self):
+        """Network exception must return Intent(type='question') without raising."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(side_effect=Exception("timeout"))
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = await tb._classify_intent("anything")
+
+        assert intent.type == "question"
+        assert intent.text == "anything"
