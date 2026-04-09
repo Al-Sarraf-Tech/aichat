@@ -75,6 +75,10 @@ async def _send_telegram(text: str, reply_to: int | None = None) -> None:
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload)
+        if resp.status_code == 400:
+            # Markdown parse failure — retry without parse_mode
+            payload.pop("parse_mode", None)
+            resp = await client.post(url, json=payload)
         if resp.status_code != 200:
             logger.error("Telegram sendMessage failed: %s %s", resp.status_code, resp.text)
     except Exception as exc:  # noqa: BLE001
@@ -91,7 +95,7 @@ async def _get_updates(offset: int) -> list[dict[str, Any]]:
     params = {
         "offset": offset,
         "timeout": 30,
-        "allowed_updates": ["message"],
+        "allowed_updates": json.dumps(["message"]),
     }
     try:
         async with httpx.AsyncClient(timeout=35) as client:
@@ -259,7 +263,7 @@ async def _classify_intent(message: str) -> Intent:
 # Poll loop + auth gate
 # ---------------------------------------------------------------------------
 
-# State: pending "which repo?" follow-ups keyed by message_id that asked
+# State: pending "which repo?" follow-ups keyed by chat_id
 _pending_code: dict[int, Intent] = {}
 
 
@@ -277,21 +281,14 @@ async def _handle_message(message: dict[str, Any]) -> None:
     if not text:
         return
 
-    # Check if this is a reply to a "which repo?" prompt
-    if msg_id in _pending_code:
-        intent = _pending_code.pop(msg_id)
+    # Check if there's a pending "which repo?" follow-up for this chat
+    chat_id = message.get("chat", {}).get("id", 0)
+    if chat_id in _pending_code:
+        intent = _pending_code.pop(chat_id)
         intent.repo = text
+        await _send_telegram(f"Working on: {intent.task} in {intent.repo}", reply_to=msg_id)
         await _dispatch_code(intent, reply_to=msg_id)
         return
-
-    # Also check if any pending code intent is waiting for a repo answer
-    # (user typed the repo name as a follow-up without replying)
-    for pending_msg_id, pending_intent in list(_pending_code.items()):
-        if pending_intent.repo is None:
-            _pending_code.pop(pending_msg_id)
-            pending_intent.repo = text
-            await _dispatch_code(pending_intent, reply_to=msg_id)
-            return
 
     # Keyword shortcuts
     lower = text.lower()
@@ -311,9 +308,9 @@ async def _handle_message(message: dict[str, Any]) -> None:
         await _dispatch_tool(intent, reply_to=msg_id)
     elif intent.type == "code":
         if not intent.repo:
-            # Need to know which repo — ask and store pending
-            ask_msg_id = msg_id + 1  # approximate; updated when we get the real reply
-            _pending_code[ask_msg_id] = intent
+            # Need to know which repo — ask and store pending keyed by chat_id
+            chat_id = message.get("chat", {}).get("id", 0)
+            _pending_code[chat_id] = intent
             await _send_telegram("Which repo?", reply_to=msg_id)
         else:
             await _dispatch_code(intent, reply_to=msg_id)
@@ -458,6 +455,9 @@ async def _dispatch_tool(intent: Intent, reply_to: int | None = None) -> None:
         await _send_telegram(f"Error running {intent.tool}: {exc}", reply_to=reply_to)
 
 
+_CLAUDE_TIMEOUT = 600  # 10 minutes max per coding task
+
+
 async def _stream_claude(
     ssh_command: str,
     reply_to: int | None,
@@ -470,6 +470,8 @@ async def _stream_claude(
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=10",
         "-o", "BatchMode=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
         "-p", str(_SSH_PORT),
         f"{_SSH_USER}@{_SSH_HOST}",
         ssh_command,
@@ -507,7 +509,12 @@ async def _stream_claude(
     try:
         assert proc.stdout is not None, "subprocess stdout must be PIPE"
         while True:
-            line_bytes = await proc.stdout.readline()
+            try:
+                line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=_CLAUDE_TIMEOUT)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                return f"Timed out after {_CLAUDE_TIMEOUT}s -- {task_state.description}"
             if not line_bytes:
                 break
             line = line_bytes.decode("utf-8", errors="replace").strip()

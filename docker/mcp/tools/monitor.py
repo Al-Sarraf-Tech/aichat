@@ -397,9 +397,28 @@ async def _overview(ssh: SSHExecutor) -> str:
         " echo '---NPROC---';"
         " nproc"
     )
-    vitals_results: dict[str, SSHResult] = await ssh.run_multi(FLEET_HOSTS, vitals_cmd)
+    # Short timeout — dominus (Windows) can't run Linux commands, will timeout gracefully
+    vitals_results: dict[str, SSHResult] = await ssh.run_multi(FLEET_HOSTS, vitals_cmd, timeout=10)
 
     lines: list[str] = ["=== Fleet Overview ==="]
+
+    # Windows hosts (WSL2 SSH → powershell.exe) get separate vitals
+    _WINDOWS_HOSTS = {"dominus"}
+    _WIN_VITALS_CMD = (
+        "echo WIN_CPU=$(powershell.exe -NoProfile -Command "
+        "'Get-CimInstance Win32_Processor | Select -Expand LoadPercentage') && "
+        "echo WIN_CORES=$(nproc) && "
+        "powershell.exe -NoProfile -Command "
+        "'systeminfo | Select-String Memory'"
+    )
+    for wh in _WINDOWS_HOSTS:
+        if wh in FLEET_HOSTS:
+            try:
+                wr = await ssh.run(wh, _WIN_VITALS_CMD, timeout=15)
+                if wr.returncode == 0 and wr.stdout.strip():
+                    vitals_results[wh] = wr
+            except Exception:
+                pass
 
     for host in FLEET_HOSTS:
         lines.append(f"\n--- {host} ---")
@@ -409,6 +428,24 @@ async def _overview(ssh: SSHExecutor) -> str:
         r = vitals_results[host]
         if r.returncode != 0 or not r.stdout.strip():
             lines.append("  [unreachable]")
+            continue
+
+        # Windows host — parse WIN_CPU, WIN_CORES, and Memory lines
+        if host in _WINDOWS_HOSTS and "WIN_CPU" in r.stdout:
+            parts = []
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("WIN_CPU="):
+                    parts.append(f"CPU {line.split('=', 1)[1]}%")
+                elif line.startswith("WIN_CORES="):
+                    parts.append(f"Cores {line.split('=', 1)[1]}")
+                elif "Total Physical Memory" in line:
+                    mem_total = line.split(":")[-1].strip()
+                    parts.append(f"RAM total {mem_total}")
+                elif "Available Physical Memory" in line:
+                    mem_free = line.split(":")[-1].strip()
+                    parts.append(f"RAM free {mem_free}")
+            lines.append(f"  {' | '.join(parts)}")
             continue
 
         stdout = r.stdout
