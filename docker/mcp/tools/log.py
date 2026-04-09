@@ -10,7 +10,7 @@ Actions:
   between — filter log lines within an ISO 8601 timestamp range
 
 Security:
-  - _validate_file_param(): rejects '..', absolute paths, allows only [\\w.*?\\-]+
+  - _validate_file_param(): rejects '..', absolute paths, allows only safe chars
   - _shell_quote(): single-quote escaping for safe SSH command building
   - Output capped at max_results (default 100, hard max 500)
 
@@ -99,7 +99,7 @@ def _validate_file_param(file: str) -> str | None:
       - Must not be empty
       - Must not start with '/' (absolute path)
       - Must not contain '..' (directory traversal)
-      - Must match only safe chars: [\\w.*?\\-]+
+      - Must match only safe chars: word chars, dots, asterisks, hyphens
     """
     if not file:
         return "log: 'file' parameter is empty"
