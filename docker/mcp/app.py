@@ -33,6 +33,7 @@ from __future__ import annotations
 # --- New modular tools ---
 from tools import TOOL_SCHEMAS, TOOL_HANDLERS  # noqa: E402
 import tools.ssh, tools.monitor, tools.git, tools.notify, tools.iot, tools.log  # noqa: F401,E402
+from tools.telegram_bot import poll_loop as _telegram_poll_loop  # noqa: E402
 
 import asyncio
 import base64
@@ -784,7 +785,22 @@ async def _vision_confirm(
     return result
 
 
-app = FastAPI(title="aichat-mcp")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app_instance):
+    """Start background services on app startup, clean up on shutdown."""
+    telegram_task = asyncio.create_task(_telegram_poll_loop())
+    yield
+    telegram_task.cancel()
+    try:
+        await telegram_task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="aichat-mcp", lifespan=_lifespan)
 
 # Allow all origins so LM Studio (Electron/WebView2) can connect without CORS issues.
 app.add_middleware(

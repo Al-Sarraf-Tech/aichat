@@ -123,8 +123,13 @@ class TestOverviewAction:
             stdout=_tailscale_json(), stderr="", returncode=0, host="amarillo", elapsed=0.05
         )
 
+        # Windows vitals for dominus
+        win_result = SSHResult(
+            stdout="WIN_CPU=20\nWIN_CORES=32\nTotal Physical Memory:     130,437 MB\nAvailable Physical Memory:  80,000 MB\n",
+            stderr="", returncode=0, host="dominus", elapsed=0.2,
+        )
         mock_ssh.run_multi.return_value = {"amarillo": vitals_result}
-        mock_ssh.run.side_effect = [containers_result, tailscale_result]
+        mock_ssh.run.side_effect = [win_result, containers_result, tailscale_result]
 
         result = await handle({"action": "overview"}, mock_ssh)
 

@@ -27,7 +27,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 # Helpers / constants
 # ===========================================================================
 
-_DEFAULT_ALLOWED = {"amarillo", "dominus", "sentinel", "superemus", "host.docker.internal"}
+_DEFAULT_ALLOWED = {"amarillo", "dominus", "host.docker.internal", "192.168.50.2"}
 
 
 # ===========================================================================
@@ -87,8 +87,15 @@ class TestHostResolution:
     def test_bare_non_alias_gets_tailscale_suffix(self):
         """A bare name that is NOT an alias gets .tail9bdca.ts.net appended."""
         ex = SSHExecutor()
+        # Use a name that isn't in _HOST_ALIASES
+        resolved = ex._resolve_host("newhost")
+        assert resolved == "newhost.tail9bdca.ts.net"
+
+    def test_dominus_resolves_to_lan_ip(self):
+        """dominus alias resolves to LAN IP."""
+        ex = SSHExecutor()
         resolved = ex._resolve_host("dominus")
-        assert resolved == "dominus.tail9bdca.ts.net"
+        assert resolved == "192.168.50.2"
 
     def test_already_qualified_hostname_is_unchanged(self):
         """A hostname that already contains a dot is passed through unchanged."""
@@ -165,10 +172,10 @@ class TestRunCommand:
         """run() must raise RuntimeError when the circuit is open."""
         ex = SSHExecutor()
         for _ in range(3):
-            ex._record_failure("sentinel")
+            ex._record_failure("amarillo")
 
         with pytest.raises(RuntimeError, match="[Cc]ircuit.*open|[Oo]pen.*circuit"):
-            await ex.run("sentinel", "uptime")
+            await ex.run("amarillo", "uptime")
 
 
 # ===========================================================================

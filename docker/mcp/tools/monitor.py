@@ -29,7 +29,7 @@ from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
 
 THERMAL_WARN_C: float = 85.0
 DISK_WARN_PCT: int = 85
-FLEET_HOSTS: list[str] = ["amarillo", "dominus", "sentinel", "superemus"]
+FLEET_HOSTS: list[str] = ["amarillo", "dominus"]
 
 # Services to health-check (name, URL)
 _SERVICES: list[tuple[str, str]] = [
@@ -101,18 +101,52 @@ def _parse_temps(sensors_json: str) -> list[tuple[str, float]]:
     if not isinstance(data, dict):
         return results
 
+    # Chips/features to skip (noise: board sensors with bogus values)
+    _SKIP_FEATURES = {"AUXTIN", "PECI", "PCH", "Calibration"}
+
     for chip_name, chip_data in data.items():
         if not isinstance(chip_data, dict):
             continue
         for feature_name, feature_data in chip_data.items():
             if not isinstance(feature_data, dict):
                 continue
+            # Skip noisy board sensor features
+            if any(skip in feature_name for skip in _SKIP_FEATURES):
+                continue
             for subkey, value in feature_data.items():
-                if subkey.endswith("_input") and isinstance(value, (int, float)):
+                if subkey.startswith("temp") and subkey.endswith("_input") and isinstance(value, (int, float)):
+                    if value < -40 or value > 150:
+                        continue
                     label = f"{chip_name}/{feature_name}"
                     results.append((label, float(value)))
 
     return results
+
+
+def _summarize_temps(temps: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Reduce full temp list to key readings: CPU package, GPU, NVMe composites.
+
+    Skips individual cores, individual NVMe sensors, NIC temps, board sensors.
+    """
+    summary: list[tuple[str, float]] = []
+    for label, val in temps:
+        lower = label.lower()
+        # CPU package temp (not individual cores)
+        if "package" in lower:
+            summary.append(("CPU", val))
+        # GPU temp
+        elif "i915" in lower or "amdgpu" in lower:
+            summary.append(("GPU", val))
+        # NVMe composite only (not Sensor 1/2/8)
+        elif "nvme" in lower and "composite" in lower:
+            # Use last path component for drive identity
+            drive = label.split("/")[0].replace("nvme-pci-", "NVMe ")
+            summary.append((drive, val))
+    # If nothing matched (e.g., different sensor layout), return max temp
+    if not summary and temps:
+        max_temp = max(temps, key=lambda t: t[1])
+        summary.append(("max", max_temp[1]))
+    return summary
 
 
 def _parse_mem(free_output: str) -> tuple[int, int]:
@@ -161,6 +195,11 @@ def _parse_df(df_output: str) -> list[tuple[str, int]]:
                     mount_field = parts[i + 1]
                 break
         if pct_field is not None and mount_field is not None:
+            # Skip virtual/pseudo filesystems
+            _SKIP_MOUNTS = ("/dev", "/dev/shm", "/run", "/sys", "/proc",
+                            "/run/credentials", "/run/user")
+            if any(mount_field == s or mount_field.startswith(s + "/") for s in _SKIP_MOUNTS):
+                continue
             try:
                 pct = int(pct_field.rstrip("%"))
                 results.append((mount_field, pct))
@@ -333,14 +372,14 @@ async def _tailscale(ssh: SSHExecutor) -> str:
     # The field may be "Peer" (singular, dict of dicts) or "Peers"
     peers: dict[str, Any] = data.get("Peer", data.get("Peers", {}))
     if peers:
-        lines.append("  peers:")
-        for peer_data in peers.values():
+        # Filter out funnel-ingress-node and only show real devices
+        real_peers = [p for p in peers.values() if p.get("HostName", "").lower() != "funnel-ingress-node"]
+        online = sum(1 for p in real_peers if p.get("Online"))
+        lines.append(f"  {online}/{len(real_peers)} peers online")
+        for peer_data in real_peers:
             p_name = peer_data.get("HostName", "?")
-            p_ips = ", ".join(peer_data.get("TailscaleIPs", []))
             p_online = "online" if peer_data.get("Online") else "offline"
-            p_os = peer_data.get("OS", "")
-            os_str = f" ({p_os})" if p_os else ""
-            lines.append(f"    {p_name}{os_str} [{p_ips}] {p_online}")
+            lines.append(f"    {p_name}: {p_online}")
     else:
         lines.append("  peers: (none)")
 
@@ -358,9 +397,28 @@ async def _overview(ssh: SSHExecutor) -> str:
         " echo '---NPROC---';"
         " nproc"
     )
-    vitals_results: dict[str, SSHResult] = await ssh.run_multi(FLEET_HOSTS, vitals_cmd)
+    # Short timeout — dominus (Windows) can't run Linux commands, will timeout gracefully
+    vitals_results: dict[str, SSHResult] = await ssh.run_multi(FLEET_HOSTS, vitals_cmd, timeout=10)
 
     lines: list[str] = ["=== Fleet Overview ==="]
+
+    # Windows hosts (WSL2 SSH → powershell.exe) get separate vitals
+    _WINDOWS_HOSTS = {"dominus"}
+    _WIN_VITALS_CMD = (
+        "echo WIN_CPU=$(powershell.exe -NoProfile -Command "
+        "'Get-CimInstance Win32_Processor | Select -Expand LoadPercentage') && "
+        "echo WIN_CORES=$(nproc) && "
+        "powershell.exe -NoProfile -Command "
+        "'systeminfo | Select-String Memory'"
+    )
+    for wh in _WINDOWS_HOSTS:
+        if wh in FLEET_HOSTS:
+            try:
+                wr = await ssh.run(wh, _WIN_VITALS_CMD, timeout=15)
+                if wr.returncode == 0 and wr.stdout.strip():
+                    vitals_results[wh] = wr
+            except Exception:
+                pass
 
     for host in FLEET_HOSTS:
         lines.append(f"\n--- {host} ---")
@@ -370,6 +428,24 @@ async def _overview(ssh: SSHExecutor) -> str:
         r = vitals_results[host]
         if r.returncode != 0 or not r.stdout.strip():
             lines.append("  [unreachable]")
+            continue
+
+        # Windows host — parse WIN_CPU, WIN_CORES, and Memory lines
+        if host in _WINDOWS_HOSTS and "WIN_CPU" in r.stdout:
+            parts = []
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("WIN_CPU="):
+                    parts.append(f"CPU {line.split('=', 1)[1]}%")
+                elif line.startswith("WIN_CORES="):
+                    parts.append(f"Cores {line.split('=', 1)[1]}")
+                elif "Total Physical Memory" in line:
+                    mem_total = line.split(":")[-1].strip()
+                    parts.append(f"RAM total {mem_total}")
+                elif "Available Physical Memory" in line:
+                    mem_free = line.split(":")[-1].strip()
+                    parts.append(f"RAM free {mem_free}")
+            lines.append(f"  {' | '.join(parts)}")
             continue
 
         stdout = r.stdout
@@ -397,13 +473,15 @@ async def _overview(ssh: SSHExecutor) -> str:
         else:
             df_part = rest2
 
-        # Thermals
+        # Thermals (summarized: CPU package, GPU, NVMe composites)
         temps = _parse_temps(sensors_part.strip())
-        if temps:
-            lines.append("  Temps:")
-            for label, val in temps:
+        key_temps = _summarize_temps(temps)
+        if key_temps:
+            temp_parts = []
+            for label, val in key_temps:
                 flag = " WARNING" if val >= THERMAL_WARN_C else ""
-                lines.append(f"    {label}: {val:.1f}°C{flag}")
+                temp_parts.append(f"{label} {val:.0f}C{flag}")
+            lines.append(f"  Temps: {' | '.join(temp_parts)}")
         else:
             lines.append("  Temps: (no data)")
 
@@ -415,13 +493,15 @@ async def _overview(ssh: SSHExecutor) -> str:
         else:
             lines.append("  Mem: (no data)")
 
-        # Disk
+        # Disk (only mounts with >5% usage, compact format)
         mounts = _parse_df(df_part.strip())
-        if mounts:
-            lines.append("  Disk:")
-            for mount, pct in mounts:
-                flag = f" WARNING ({pct}% used)" if pct >= DISK_WARN_PCT else ""
-                lines.append(f"    {mount}: {pct}%{flag}")
+        significant = [(m, p) for m, p in mounts if p > 5]
+        if significant:
+            disk_parts = []
+            for mount, pct in significant:
+                flag = " WARNING" if pct >= DISK_WARN_PCT else ""
+                disk_parts.append(f"{mount} {pct}%{flag}")
+            lines.append(f"  Disk: {' | '.join(disk_parts)}")
         else:
             lines.append("  Disk: (no data)")
 
@@ -430,10 +510,13 @@ async def _overview(ssh: SSHExecutor) -> str:
         if nproc.isdigit():
             lines.append(f"  CPUs: {nproc}")
 
-    # Containers on amarillo
+    # Containers on amarillo — summary + flagged only
     containers_r: SSHResult = await ssh.run("amarillo", "docker ps --format json")
     lines.append("\n--- Containers (amarillo) ---")
     if containers_r.returncode == 0 and containers_r.stdout.strip():
+        total = 0
+        healthy = 0
+        flagged: list[str] = []
         for raw_line in containers_r.stdout.splitlines():
             raw_line = raw_line.strip()
             if not raw_line:
@@ -442,30 +525,35 @@ async def _overview(ssh: SSHExecutor) -> str:
                 obj = json.loads(raw_line)
                 name = obj.get("Names", obj.get("Name", "?"))
                 status = obj.get("Status", "?")
-                lines.append(f"  {name}  —  {status}")
+                total += 1
+                status_lower = status.lower()
+                if "healthy" in status_lower and "unhealthy" not in status_lower:
+                    healthy += 1
+                if "unhealthy" in status_lower or "restarting" in status_lower or "exited" in status_lower:
+                    flagged.append(f"  {name}: {status}")
             except json.JSONDecodeError:
-                lines.append(f"  {raw_line}")
+                pass
+        lines.append(f"  {total} running, {healthy} healthy")
+        if flagged:
+            lines.append("  Issues:")
+            lines.extend(flagged)
     else:
         lines.append("  (none or unreachable)")
 
-    # Tailscale
+    # Tailscale (real devices only, skip funnel-ingress-node)
     ts_r: SSHResult = await ssh.run("amarillo", "tailscale status --json")
     lines.append("\n--- Tailscale ---")
     if ts_r.returncode == 0:
         try:
             ts_data = json.loads(ts_r.stdout)
-            self_info = ts_data.get("Self", {})
-            if self_info:
-                name = self_info.get("HostName", "?")
-                ips = ", ".join(self_info.get("TailscaleIPs", []))
-                online = "online" if self_info.get("Online") else "offline"
-                lines.append(f"  self: {name} [{ips}] {online}")
-            peers: dict[str, Any] = ts_data.get("Peer", ts_data.get("Peers", {}))
-            for peer_data in peers.values():
-                p_name = peer_data.get("HostName", "?")
-                p_ips = ", ".join(peer_data.get("TailscaleIPs", []))
-                p_online = "online" if peer_data.get("Online") else "offline"
-                lines.append(f"  peer: {p_name} [{p_ips}] {p_online}")
+            peers_raw: dict[str, Any] = ts_data.get("Peer", ts_data.get("Peers", {}))
+            real_peers = [p for p in peers_raw.values() if p.get("HostName", "").lower() != "funnel-ingress-node"]
+            online = sum(1 for p in real_peers if p.get("Online"))
+            lines.append(f"  {online}/{len(real_peers)} devices online")
+            for p in real_peers:
+                name = p.get("HostName", "?")
+                status = "online" if p.get("Online") else "offline"
+                lines.append(f"  {name}: {status}")
         except (json.JSONDecodeError, AttributeError):
             lines.append("  (could not parse tailscale JSON)")
     else:

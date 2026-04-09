@@ -20,6 +20,7 @@ The container reaches the host via host.docker.internal. Bare hostnames
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -35,20 +36,26 @@ _DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
     {
         "amarillo",
         "dominus",
-        "sentinel",
-        "superemus",
         "host.docker.internal",
+        "192.168.50.2",
     }
 )
 
 # alias to resolved target (resolved target must itself be in allowed_hosts)
 _HOST_ALIASES: dict[str, str] = {
     "amarillo": "host.docker.internal",
+    "dominus": "192.168.50.2",
 }
 
-_SSH_KEY: str = "/app/.ssh/team_key"
-_SSH_USER: str = "jalsarraf"
-_SSH_PORT: int = 22
+# Per-host SSH port overrides (hosts not listed use _SSH_PORT default)
+_HOST_PORTS: dict[str, int] = {
+    "dominus": 22,
+    "192.168.50.2": 22,
+}
+
+_SSH_KEY: str = os.environ.get("TEAM_SSH_KEY", "/app/.ssh/team_key")
+_SSH_USER: str = os.environ.get("TEAM_SSH_USER", "jalsarraf")
+_SSH_PORT: int = int(os.environ.get("TEAM_SSH_PORT", "22"))
 
 _SSH_FLAGS: list[str] = [
     "-i", _SSH_KEY,
@@ -308,8 +315,11 @@ class SSHExecutor:
             )
 
         target = self._resolve_host(host)
-        port_flags = ["-p", str(port)] if port is not None else []
-        cmd_args = ["ssh", *_SSH_FLAGS, *port_flags, target, command]
+        # Per-host port override, then explicit port arg, then default
+        effective_port = port if port is not None else _HOST_PORTS.get(host, _HOST_PORTS.get(target, self._port))
+        port_flags = ["-p", str(effective_port)]
+        user_host = f"{self._user}@{target}"
+        cmd_args = ["ssh", *_SSH_FLAGS, *port_flags, user_host, command]
 
         start = time.monotonic()
         try:
