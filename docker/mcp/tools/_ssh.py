@@ -39,12 +39,14 @@ _DEFAULT_ALLOWED_HOSTS: frozenset[str] = frozenset(
         "sentinel",
         "superemus",
         "host.docker.internal",
+        "192.168.50.2",
     }
 )
 
 # alias to resolved target (resolved target must itself be in allowed_hosts)
 _HOST_ALIASES: dict[str, str] = {
     "amarillo": "host.docker.internal",
+    "dominus": "192.168.50.2",
 }
 
 _SSH_KEY: str = os.environ.get("TEAM_SSH_KEY", "/app/.ssh/team_key")

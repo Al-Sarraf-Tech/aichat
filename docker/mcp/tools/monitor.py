@@ -108,7 +108,9 @@ def _parse_temps(sensors_json: str) -> list[tuple[str, float]]:
             if not isinstance(feature_data, dict):
                 continue
             for subkey, value in feature_data.items():
-                if subkey.endswith("_input") and isinstance(value, (int, float)):
+                # Only temp*_input fields are actual temperatures.
+                # Skip fan*_input (RPM), in*_input (voltage), energy*_input, etc.
+                if subkey.startswith("temp") and subkey.endswith("_input") and isinstance(value, (int, float)):
                     label = f"{chip_name}/{feature_name}"
                     results.append((label, float(value)))
 
