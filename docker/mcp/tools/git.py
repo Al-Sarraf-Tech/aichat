@@ -16,7 +16,7 @@ Actions:
 
 Security:
   Repo names are validated by _validate_repo(): rejects '..' and '/' characters,
-  allows only word chars and hyphens (pattern: [\\w\\-]+).
+  allows only word chars and hyphens.
 
 Registered with the tool registry at import time via register().
 """
