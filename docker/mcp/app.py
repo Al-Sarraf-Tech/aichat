@@ -30,6 +30,10 @@ base64-encoded PNG image block so it renders directly in the chat.
 """
 from __future__ import annotations
 
+# --- New modular tools ---
+from tools import TOOL_SCHEMAS, TOOL_HANDLERS  # noqa: E402
+import tools.ssh, tools.monitor, tools.git, tools.notify, tools.iot, tools.log  # noqa: F401,E402
+
 import asyncio
 import base64
 import collections
@@ -1929,6 +1933,9 @@ _TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Register modular tools (ssh, monitor, git, notify, iot, log)
+_TOOLS.extend(TOOL_SCHEMAS)
+
 
 # ---------------------------------------------------------------------------
 # plan_task catalog — curated short list of core tools (~25) for the planner prompt.
@@ -3779,6 +3786,11 @@ async def _call_tool(name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Dispatch a tool call and return a list of MCP content blocks."""
     # Resolve mega-tool calls to original handler names
     name, args = _resolve_mega_tool(name, dict(args))  # copy args to avoid mutation
+
+    # Dispatch to modular tools first (ssh, monitor, git, notify, iot, log)
+    if name in TOOL_HANDLERS:
+        return await TOOL_HANDLERS[name](args)
+
     async with httpx.AsyncClient(timeout=60) as c:
         try:
             # ----------------------------------------------------------------
