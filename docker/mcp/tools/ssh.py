@@ -12,11 +12,12 @@ Registered with the tool registry at import time via register().
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from tools import register  # type: ignore[import]
-from tools._ssh import SSHExecutor, SSHResult  # type: ignore[import]
+from tools._ssh import SSHExecutor, SSHResult, sanitize_ssh_error  # type: ignore[import]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -85,9 +86,9 @@ def _text(content: str) -> list[dict[str, Any]]:
     return [{"type": "text", "text": content}]
 
 
-def _sanitize(message: str, _ex: SSHExecutor = SSHExecutor()) -> str:
-    """Sanitize an SSH error via the module-level helper."""
-    return _ex._sanitize_ssh_error(message)
+def _sanitize(message: str) -> str:
+    """Sanitize an SSH error message via the module-level helper."""
+    return sanitize_ssh_error(message)
 
 
 # ---------------------------------------------------------------------------
@@ -192,16 +193,44 @@ async def _upload(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]
             f"got {local_path!r}"
         )
 
+    if not ssh.is_host_allowed(host):
+        return _text(f"ssh upload: host {host!r} is not allowed")
+
     timeout = float(args.get("timeout", 60.0))
+    resolved_host = ssh._resolve_host(host)
+    user = ssh.user
+    port = ssh.port
+
     try:
-        result: SSHResult = await ssh.run(host, f"cat > {remote_path}", timeout=timeout)
-    except (ValueError, RuntimeError) as exc:
+        proc = await asyncio.create_subprocess_exec(
+            "scp",
+            "-i", "/app/.ssh/team_key",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-P", str(port),
+            local_path,
+            f"{user}@{resolved_host}:{remote_path}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return _text(f"upload timed out after {timeout}s")
+
+        returncode = proc.returncode if proc.returncode is not None else -1
+    except Exception as exc:
         return _text(f"ssh upload error: {_sanitize(str(exc))}")
 
-    if result.returncode == 0:
+    if returncode == 0:
         return _text(f"upload: {local_path} -> {host}:{remote_path} completed")
-    sanitized = _sanitize(result.stderr.strip())
-    return _text(f"upload failed (exit {result.returncode}): {sanitized}")
+    stderr_msg = stderr_bytes.decode("utf-8", errors="replace").strip()
+    sanitized = _sanitize(stderr_msg)
+    return _text(f"upload failed (exit {returncode}): {sanitized}")
 
 
 async def _download(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, Any]]:
@@ -221,16 +250,44 @@ async def _download(args: dict[str, Any], ssh: SSHExecutor) -> list[dict[str, An
             f"got {local_path!r}"
         )
 
+    if not ssh.is_host_allowed(host):
+        return _text(f"ssh download: host {host!r} is not allowed")
+
     timeout = float(args.get("timeout", 60.0))
+    resolved_host = ssh._resolve_host(host)
+    user = ssh.user
+    port = ssh.port
+
     try:
-        result: SSHResult = await ssh.run(host, f"cat {remote_path}", timeout=timeout)
-    except (ValueError, RuntimeError) as exc:
+        proc = await asyncio.create_subprocess_exec(
+            "scp",
+            "-i", "/app/.ssh/team_key",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "-P", str(port),
+            f"{user}@{resolved_host}:{remote_path}",
+            local_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return _text(f"download timed out after {timeout}s")
+
+        returncode = proc.returncode if proc.returncode is not None else -1
+    except Exception as exc:
         return _text(f"ssh download error: {_sanitize(str(exc))}")
 
-    if result.returncode == 0:
+    if returncode == 0:
         return _text(f"download: {host}:{remote_path} -> {local_path} completed")
-    sanitized = _sanitize(result.stderr.strip())
-    return _text(f"download failed (exit {result.returncode}): {sanitized}")
+    stderr_msg = stderr_bytes.decode("utf-8", errors="replace").strip()
+    sanitized = _sanitize(stderr_msg)
+    return _text(f"download failed (exit {returncode}): {sanitized}")
 
 
 # ---------------------------------------------------------------------------

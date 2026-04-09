@@ -5,8 +5,8 @@ Test groups:
   - exec action (5 tests)
   - test action (2 tests)
   - list_hosts action (1 test)
-  - upload path restriction (2 tests)
-  - download path restriction (1 test)
+  - upload path restriction (2 tests) + SCP subprocess test (1 test)
+  - download path restriction (1 test) + SCP subprocess test (1 test)
   - unknown / missing action (2 tests)
 
 Run with:
@@ -16,6 +16,7 @@ Run with:
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -161,32 +162,47 @@ class TestListHostsAction:
 
 
 # ===========================================================================
-# upload path restriction — 2 tests
+# upload path restriction — 2 tests + SCP subprocess test
 # ===========================================================================
 
 class TestUploadPathRestriction:
     """handle() with action='upload' — path must start with /workspace/."""
 
     @pytest.mark.asyncio
-    async def test_upload_valid_path_calls_ssh(self, mock_ssh):
-        """upload with local_path under /workspace/ must proceed and call ssh.run."""
+    async def test_upload_valid_path_uses_scp_not_ssh_run(self, mock_ssh):
+        """upload with valid /workspace/ path must use SCP subprocess, not ssh.run."""
         from tools.ssh import handle  # type: ignore[import]
 
-        mock_ssh.run.return_value = SSHResult(
-            stdout="", stderr="", returncode=0, host="amarillo", elapsed=0.3
-        )
-        result = await handle(
-            {
-                "action": "upload",
-                "host": "amarillo",
-                "local_path": "/workspace/data.csv",
-                "remote_path": "/tmp/data.csv",
-            },
-            mock_ssh,
-        )
+        # mock_ssh needs is_host_allowed and _resolve_host for the SCP path
+        mock_ssh.is_host_allowed = MagicMock(return_value=True)
+        mock_ssh._resolve_host = MagicMock(return_value="host.docker.internal")
+        mock_ssh.user = "jalsarraf"
+        mock_ssh.port = 22
+
+        fake_proc = AsyncMock()
+        fake_proc.returncode = 0
+        fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc) as mock_exec:
+            result = await handle(
+                {
+                    "action": "upload",
+                    "host": "amarillo",
+                    "local_path": "/workspace/data.csv",
+                    "remote_path": "/tmp/data.csv",
+                },
+                mock_ssh,
+            )
 
         assert result[0]["type"] == "text"
-        mock_ssh.run.assert_called_once()
+        assert "completed" in result[0]["text"]
+        # SCP runs as a direct subprocess — ssh.run must NOT be called
+        mock_ssh.run.assert_not_called()
+        # Verify scp was invoked with expected arguments
+        call_args = mock_exec.call_args[0]
+        assert call_args[0] == "scp"
+        assert "/workspace/data.csv" in call_args
+        assert "jalsarraf@host.docker.internal:/tmp/data.csv" in call_args
 
     @pytest.mark.asyncio
     async def test_upload_invalid_path_returns_error(self, mock_ssh):
@@ -209,11 +225,45 @@ class TestUploadPathRestriction:
 
 
 # ===========================================================================
-# download path restriction — 1 test
+# download path restriction — 1 test + SCP subprocess test
 # ===========================================================================
 
 class TestDownloadPathRestriction:
     """handle() with action='download' — path must start with /workspace/."""
+
+    @pytest.mark.asyncio
+    async def test_download_valid_path_uses_scp_not_ssh_run(self, mock_ssh):
+        """download with valid /workspace/ path must use SCP subprocess, not ssh.run."""
+        from tools.ssh import handle  # type: ignore[import]
+
+        mock_ssh.is_host_allowed = MagicMock(return_value=True)
+        mock_ssh._resolve_host = MagicMock(return_value="host.docker.internal")
+        mock_ssh.user = "jalsarraf"
+        mock_ssh.port = 22
+
+        fake_proc = AsyncMock()
+        fake_proc.returncode = 0
+        fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=fake_proc) as mock_exec:
+            result = await handle(
+                {
+                    "action": "download",
+                    "host": "amarillo",
+                    "remote_path": "/var/log/syslog",
+                    "local_path": "/workspace/syslog",
+                },
+                mock_ssh,
+            )
+
+        assert result[0]["type"] == "text"
+        assert "completed" in result[0]["text"]
+        mock_ssh.run.assert_not_called()
+        # Verify scp source/dest order is reversed for download
+        call_args = mock_exec.call_args[0]
+        assert call_args[0] == "scp"
+        assert "jalsarraf@host.docker.internal:/var/log/syslog" in call_args
+        assert "/workspace/syslog" in call_args
 
     @pytest.mark.asyncio
     async def test_download_invalid_path_returns_error(self, mock_ssh):

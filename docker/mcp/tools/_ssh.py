@@ -46,8 +46,12 @@ _HOST_ALIASES: dict[str, str] = {
     "amarillo": "host.docker.internal",
 }
 
+_SSH_KEY: str = "/app/.ssh/team_key"
+_SSH_USER: str = "jalsarraf"
+_SSH_PORT: int = 22
+
 _SSH_FLAGS: list[str] = [
-    "-i", "/app/.ssh/team_key",
+    "-i", _SSH_KEY,
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=10",
     "-o", "BatchMode=yes",
@@ -66,6 +70,26 @@ _REDACT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # /root/... paths
     (re.compile(r"/root(?:/[^\s]*)?"), "<home-path>"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Module-level sanitize helper (usable without instantiating SSHExecutor)
+# ---------------------------------------------------------------------------
+
+
+def sanitize_ssh_error(message: str) -> str:
+    """Strip sensitive details from SSH error messages.
+
+    Removes:
+      - Internal IP addresses (10.x, 172.16-31.x, 192.168.x)
+      - host.docker.internal references
+      - SSH key file paths (/app/.ssh/...)
+      - Home directory paths (/home/<user>/..., /root/...)
+    """
+    result = message
+    for pattern, replacement in _REDACT_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +129,8 @@ class SSHExecutor:
         allowed_hosts: Optional[set[str]] = None,
         max_failures: int = 3,
         recovery_window: float = 30.0,
+        user: str = _SSH_USER,
+        port: int = _SSH_PORT,
     ) -> None:
         """
         Args:
@@ -114,7 +140,11 @@ class SSHExecutor:
                            circuit (default 3).
             recovery_window: Seconds after opening before auto-recovery
                              (default 30).
+            user:          SSH login user for SCP operations (default: jalsarraf).
+            port:          SSH port for SCP operations (default: 22).
         """
+        self._user = user
+        self._port = port
         if allowed_hosts is not None:
             self._allowed: frozenset[str] = frozenset(h.lower() for h in allowed_hosts)
             # Build per-executor alias map restricted to provided allowed set
@@ -129,6 +159,20 @@ class SSHExecutor:
         self._max_failures = max_failures
         self._recovery_window = recovery_window
         self._circuits: dict[str, _CircuitState] = {}
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def user(self) -> str:
+        """SSH login user used for SCP operations."""
+        return self._user
+
+    @property
+    def port(self) -> int:
+        """SSH port used for SCP operations."""
+        return self._port
 
     # ------------------------------------------------------------------
     # Allowlist
@@ -352,15 +396,5 @@ class SSHExecutor:
     # ------------------------------------------------------------------
 
     def _sanitize_ssh_error(self, message: str) -> str:
-        """Strip sensitive details from SSH error messages.
-
-        Removes:
-          - Internal IP addresses (10.x, 172.16-31.x, 192.168.x)
-          - host.docker.internal references
-          - SSH key file paths (/app/.ssh/...)
-          - Home directory paths (/home/<user>/..., /root/...)
-        """
-        result = message
-        for pattern, replacement in _REDACT_PATTERNS:
-            result = pattern.sub(replacement, result)
-        return result
+        """Delegate to the module-level sanitize_ssh_error()."""
+        return sanitize_ssh_error(message)
