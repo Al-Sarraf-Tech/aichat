@@ -68,13 +68,19 @@ Single check against TELEGRAM_CHAT_ID environment variable. Messages from any ot
 
 **Endpoint:** http://192.168.50.2:1234/v1/chat/completions (LM Studio, Gemma 4 E2B, already hot)
 
-**System prompt:** Classifies user message into structured JSON with one of three types:
+**System prompt:** Classifies user message into structured JSON with one of four types:
 
 - `{"type": "tool", "tool": "<name>", "action": "<action>", "args": {...}}` for MCP tool calls
-- `{"type": "code", "repo": "<repo or null>", "task": "<description>"}` for coding tasks
+- `{"type": "code", "repo": "<repo or null>", "task": "<description>"}` for coding tasks in existing repos
+- `{"type": "create", "name": "<project-name>", "description": "<what to build>", "language": "<rust|python|node|go|haskell|other>"}` for new project creation
 - `{"type": "question", "text": "<the question>"}` for conversational queries
 
 The prompt includes the full list of available tools and their actions, plus natural language examples for calibration. Gemma generalizes from examples to handle fuzzy input ("what's hot" maps to monitor/thermals, "put youtube on the tv" maps to iot/launch).
+
+**Create examples:**
+- "make me a rust cli for managing ssh keys" -> `{"type": "create", "name": "ssh-key-manager", "description": "Rust CLI tool for managing SSH keys", "language": "rust"}`
+- "new python script to monitor disk usage" -> `{"type": "create", "name": "disk-monitor", "description": "Python script to monitor disk usage", "language": "python"}`
+- "start a new go project for a webhook relay" -> `{"type": "create", "name": "webhook-relay", "description": "Go webhook relay service", "language": "go"}`
 
 **Fallback directive:** "If the message doesn't clearly map to a tool action, prefer type 'question' over guessing wrong."
 
@@ -122,7 +128,47 @@ For type "code" intents:
 
 Each milestone fires only once per task (tracked in a set). Heartbeat fires at 90s of silence to prevent dead air.
 
-### 6. Detailed Summary Format
+### 6. Create Dispatcher (New Projects)
+
+For type "create" intents:
+
+1. Send "Creating project: {name} ({language})" to Telegram
+2. Spawn asyncio.Task running the create function
+3. The task function:
+   a. Creates directory: `mkdir -p ~/git/{name} && cd ~/git/{name} && git init`
+   b. Runs Claude Code with a scaffolding prompt via SSH:
+      `claude --output-format stream-json -p "Create a new {language} project: {description}. Set up project structure, CLAUDE.md (inheriting from ~/.claude/CLAUDE.md conventions), CI workflow for GitHub Actions (self-hosted runners, no attest-build-provenance), README, and initial source files. Initialize git and make the first commit." --allowedTools "Edit,Write,Bash,Read,Glob,Grep"`
+   c. Same streaming milestone extraction as code dispatcher
+   d. Sends detailed summary when done
+
+**Conventions enforced via the prompt:**
+- CLAUDE.md created per user's new-repo convention (from memory)
+- CI workflow follows the user's patterns (self-hosted runners, no attestations, no macOS)
+- Project lives at `~/git/{name}` (filesystem containment)
+- Language-specific setup: Cargo.toml for Rust, pyproject.toml for Python, package.json for Node, go.mod for Go, cabal file for Haskell
+
+**Name validation:** Same rules as _validate_repo() — alphanumeric + hyphens only. If invalid, reply with error.
+
+**Example flow:**
+```
+You: "make me a rust cli for managing ssh keys"
+Bot: "Got it — classifying..."
+Bot: "Creating project: ssh-key-manager (rust)"
+Bot: "Reading codebase..."
+Bot: "Writing code..."
+Bot: "Committing..."
+Bot: "Done — ssh-key-manager (35s)
+     
+     Created Rust CLI project with clap argument parsing, 
+     SSH key generation, and listing commands.
+     
+     Files: src/main.rs, src/lib.rs, Cargo.toml, CLAUDE.md, 
+            .github/workflows/ci-rust.yml, README.md
+     Commit: abc1234 on main
+     Branch: main"
+```
+
+### 7. Detailed Summary Format (Code and Create)
 
 ```
 Done -- {repo} ({elapsed}s)
@@ -197,9 +243,10 @@ All replies use reply_to_message_id to thread responses to the original message.
 | Test Group | Tests | Mock Strategy |
 |---|---|---|
 | Auth gate | correct ID accepted, wrong ID rejected, missing ID | Mock getUpdates response |
-| Intent classifier | tool intent, code intent, question intent, bad JSON fallback | Mock LM Studio response |
+| Intent classifier | tool intent, code intent, create intent, question intent, bad JSON fallback | Mock LM Studio response |
 | Tool dispatcher | correct tool+action called, reply sent, error handled | Mock TOOL_HANDLERS + httpx |
 | Code dispatcher | acknowledge sent, milestones from stream, summary format, heartbeat | Mock subprocess + httpx |
+| Create dispatcher | project name validated, scaffolding prompt correct, milestones sent, summary | Mock subprocess + httpx |
 | Task tracker | concurrent tasks, status query, cancel kills task | Direct function calls |
 | Poll loop | offset tracking, error recovery with retry | Mock httpx |
 
