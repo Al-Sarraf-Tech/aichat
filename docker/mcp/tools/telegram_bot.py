@@ -429,7 +429,7 @@ def _build_summary(
 
 
 # ---------------------------------------------------------------------------
-# Dispatchers — Task 4: tool, code, create + milestone streaming
+# Dispatchers (Tasks 4-5)
 # ---------------------------------------------------------------------------
 
 
@@ -680,18 +680,75 @@ async def _dispatch_create(intent: Intent, reply_to: int | None = None) -> None:
     task_state.asyncio_task = bg_task
 
 
-# ---------------------------------------------------------------------------
-# Dispatchers — Task 5: status/cancel/question (stub placeholders)
-# ---------------------------------------------------------------------------
-
-
 async def _dispatch_status(reply_to: int | None = None) -> None:
-    await _send_telegram("Status not yet implemented", reply_to=reply_to)
+    """List all active tasks with elapsed time."""
+    if not _active_tasks:
+        await _send_telegram("No active tasks.", reply_to=reply_to)
+        return
+
+    lines = ["*Active tasks:*"]
+    now = time.monotonic()
+    for ts in _active_tasks.values():
+        elapsed = int(now - ts.started_at)
+        lines.append(
+            f"  `{ts.task_id}` [{ts.status}] {elapsed}s — {ts.description}"
+        )
+    await _send_telegram("\n".join(lines), reply_to=reply_to)
 
 
 async def _dispatch_cancel(reply_to: int | None = None) -> None:
-    await _send_telegram("Cancel not yet implemented", reply_to=reply_to)
+    """Cancel the most recently started task."""
+    if not _active_tasks:
+        await _send_telegram("Nothing to cancel.", reply_to=reply_to)
+        return
+
+    # Find the task with the highest started_at
+    latest_id = max(_active_tasks, key=lambda k: _active_tasks[k].started_at)
+    ts = _active_tasks.pop(latest_id)
+
+    if ts.process is not None:
+        try:
+            ts.process.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+    if ts.asyncio_task is not None:
+        ts.asyncio_task.cancel()
+
+    await _send_telegram(
+        f"Cancelled task `{latest_id}`: {ts.description}",
+        reply_to=reply_to,
+    )
+
+
+_QUESTION_SYSTEM_PROMPT = (
+    "You are a helpful infrastructure assistant for a home lab running Fedora 43. "
+    "You have access to monitoring, git, SSH, IoT, and log tools. "
+    "Answer questions concisely. "
+    "If the user seems to want an action, suggest the right phrasing."
+)
 
 
 async def _dispatch_question(intent: Intent, reply_to: int | None = None) -> None:
-    await _send_telegram("Question handler not yet implemented", reply_to=reply_to)
+    """Answer an open-ended question via LM Studio (gemma-4-e2b-it)."""
+    lm_url = os.environ.get("IMAGE_GEN_BASE_URL", _LM_STUDIO_URL)
+    url = f"{lm_url}/v1/chat/completions"
+    payload = {
+        "model": "gemma-4-e2b-it",
+        "messages": [
+            {"role": "system", "content": _QUESTION_SYSTEM_PROMPT},
+            {"role": "user", "content": intent.text},
+        ],
+        "temperature": 0.7,
+        "max_tokens": 512,
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=20.0)
+        data = resp.json()
+        answer: str = data["choices"][0]["message"]["content"].strip()
+        await _send_telegram(answer, reply_to=reply_to)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("_dispatch_question error: %s", exc)
+        await _send_telegram(f"Could not reach LM Studio: {exc}", reply_to=reply_to)

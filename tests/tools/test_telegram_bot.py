@@ -5,8 +5,6 @@ Test groups:
   - Telegram helpers (4): send success, truncation, getUpdates success, getUpdates error
   - Classifier (6): tool/code/create/question intents, malformed JSON fallback, network error fallback
   - Auth + poll loop (3): authorized correct ID, unauthorized wrong ID, handle_message dispatches tool
-  - Dispatchers Task 4 (7): tool dispatch, unknown tool, code ack+task, invalid repo,
-    milestone extraction, create ack, invalid create name
 
 Run with:
   cd ~/git/aichat
@@ -554,3 +552,148 @@ class TestDispatchCreate:
         mock_stream.assert_not_called()
         sent = " ".join(str(c) for c in mock_send.call_args_list)
         assert "invalid" in sent.lower() or "error" in sent.lower()
+
+
+# ===========================================================================
+# Task 5: Task tracker + question handler — 3 tests
+# ===========================================================================
+
+
+class TestDispatchStatus:
+    """_dispatch_status: list active tasks."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_status_no_tasks(self):
+        """_dispatch_status must say 'No active tasks.' when _active_tasks is empty."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        tb._active_tasks.clear()
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send:
+            await tb._dispatch_status(reply_to=1)
+
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "no active" in sent.lower() or "nothing" in sent.lower()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_status_lists_active_tasks(self):
+        """_dispatch_status must include task description in the reply."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        import asyncio
+        tb._active_tasks.clear()
+        tb._active_tasks["task-abc"] = tb.TaskState(
+            task_id="task-abc",
+            repo="aichat",
+            description="fix the bug",
+            status="running",
+        )
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send:
+            await tb._dispatch_status(reply_to=1)
+
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "fix the bug" in sent or "task-abc" in sent
+        tb._active_tasks.clear()
+
+
+class TestDispatchCancel:
+    """_dispatch_cancel: cancel most recent task."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_cancel_no_tasks(self):
+        """_dispatch_cancel must say 'Nothing to cancel.' when no tasks are active."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        tb._active_tasks.clear()
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send:
+            await tb._dispatch_cancel(reply_to=1)
+
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "nothing" in sent.lower() or "no active" in sent.lower()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_cancel_cancels_most_recent(self):
+        """_dispatch_cancel must cancel the most recently started task."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        import asyncio
+        import time
+        tb._active_tasks.clear()
+
+        mock_task = MagicMock()
+        mock_task.cancel = MagicMock()
+
+        tb._active_tasks["task-old"] = tb.TaskState(
+            task_id="task-old",
+            repo="aichat",
+            description="old task",
+            started_at=time.monotonic() - 100,
+            asyncio_task=None,
+        )
+        tb._active_tasks["task-new"] = tb.TaskState(
+            task_id="task-new",
+            repo="aichat",
+            description="new task",
+            started_at=time.monotonic(),
+            asyncio_task=mock_task,
+        )
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send:
+            await tb._dispatch_cancel(reply_to=1)
+
+        mock_task.cancel.assert_called_once()
+        assert "task-new" not in tb._active_tasks
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "cancel" in sent.lower() or "cancelled" in sent.lower()
+        tb._active_tasks.clear()
+
+
+class TestDispatchQuestion:
+    """_dispatch_question: send to Gemma, reply with answer."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_question_sends_to_lm_and_replies(self):
+        """_dispatch_question must call LM Studio and relay the answer."""
+        with patch.dict(os.environ, ENV_VARS):
+            import importlib
+            import tools.telegram_bot as tb
+            importlib.reload(tb)
+
+        answer_json = {
+            "choices": [{"message": {"content": "The Qdrant port is 6333."}}]
+        }
+        answer_resp = MagicMock()
+        answer_resp.status_code = 200
+        answer_resp.json.return_value = answer_json
+
+        client = _make_mock_client()
+        client.post.return_value = answer_resp
+
+        with patch.dict(os.environ, ENV_VARS), \
+             patch("tools.telegram_bot._send_telegram", new_callable=AsyncMock) as mock_send, \
+             patch("tools.telegram_bot.httpx.AsyncClient") as MockClient:
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            intent = tb.Intent(type="question", text="what is the qdrant port?")
+            await tb._dispatch_question(intent, reply_to=99)
+
+        sent = " ".join(str(c) for c in mock_send.call_args_list)
+        assert "6333" in sent or "Qdrant" in sent
