@@ -50,7 +50,11 @@ VIDEO_URL     = os.environ.get("VIDEO_URL",     "http://aichat-vision:8099")
 DETECT_URL    = os.environ.get("DETECT_URL",    "http://aichat-vision:8099/detect")
 JUPYTER_URL   = os.environ.get("JUPYTER_URL",   "http://aichat-jupyter:8098")
 BROWSER_WORKSPACE = os.environ.get("BROWSER_WORKSPACE", "/browser-workspace")
-BROWSER_URL   = os.environ.get("BROWSER_URL",   "http://aichat-browser:9222")
+BROWSER_URL       = os.environ.get("BROWSER_URL",       "http://aichat-browser:9222")
+BROWSER_AUTO_URL  = os.environ.get("BROWSER_AUTO_URL",  "http://aichat-browser:8104")
+IMAGE_GEN_BASE_URL = os.environ.get("IMAGE_GEN_BASE_URL", "http://192.168.50.2:1234")
+IMAGE_GEN_MODEL    = os.environ.get("IMAGE_GEN_MODEL",    "")
+COMFYUI_URL        = os.environ.get("COMFYUI_URL",        "")
 
 
 # ── File Resolution ──────────────────────────────────────────────
