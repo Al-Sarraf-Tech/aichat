@@ -8,31 +8,34 @@ let _container = null;
 
 function getContainer() {
   if (_container) return _container;
+
   _container = document.createElement('div');
   _container.id = 'toast-container';
   _container.setAttribute('role', 'status');
   _container.setAttribute('aria-live', 'polite');
   _container.setAttribute('aria-atomic', 'false');
   document.body.appendChild(_container);
+
   return _container;
 }
 
 const ICONS = {
   success: '\u2713',
-  error: '\u2717',
+  error:   '\u2717',
   warning: '\u26A0',
-  info: '\u2139',
+  info:    '\u2139',
 };
 
 const DURATIONS = {
   success: 3000,
-  error: 5000,
+  error:   5000,
   warning: 4000,
-  info: 3000,
+  info:    3000,
 };
 
 export function toast(message, type = 'info', duration) {
   const container = getContainer();
+
   const el = document.createElement('div');
   el.className = `toast toast-${type} toast-enter`;
 
@@ -82,10 +85,12 @@ export function toast(message, type = 'info', duration) {
 function dismiss(el) {
   if (!el || el._dismissed) return;
   el._dismissed = true;
+
   clearTimeout(el._timer);
   el.classList.remove('toast-visible');
   el.classList.add('toast-exit');
   el.addEventListener('animationend', () => el.remove(), { once: true });
+
   // Fallback removal
   setTimeout(() => { if (el.parentNode) el.remove(); }, 500);
 }

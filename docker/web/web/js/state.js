@@ -13,13 +13,17 @@ export function on(event, fn) {
 
 export function off(event, fn) {
   if (!_listeners[event]) return;
-  _listeners[event] = _listeners[event].filter(f => f !== fn);
+  _listeners[event] = _listeners[event].filter(listener => listener !== fn);
 }
 
 export function emit(event, data) {
   if (!_listeners[event]) return;
   for (const fn of _listeners[event]) {
-    try { fn(data); } catch (e) { console.error(`Event ${event}:`, e); }
+    try {
+      fn(data);
+    } catch (err) {
+      console.error(`Event ${event}:`, err);
+    }
   }
 }
 
@@ -67,11 +71,14 @@ export function loadSettings() {
     const saved = localStorage.getItem('ailab-settings');
     if (saved) Object.assign(state.settings, JSON.parse(saved));
   } catch {}
+
   state.toolsEnabled = localStorage.getItem('dartboard-tools') !== 'false';
+
   try {
     const folders = localStorage.getItem('ailab-folders');
     if (folders) state.folders = JSON.parse(folders);
   } catch {}
+
   try {
     const pins = localStorage.getItem('ailab-pins');
     if (pins) state.pinnedConvs = new Set(JSON.parse(pins));

@@ -21,7 +21,8 @@ function togglePreview() {
   } else {
     if (!previewEl) {
       previewEl = document.createElement('div');
-      previewEl.id = 'input-preview'; previewEl.className = 'input-preview';
+      previewEl.id = 'input-preview';
+      previewEl.className = 'input-preview';
       input.parentNode.insertBefore(previewEl, input.nextSibling);
     }
     const text = input.value.trim();
@@ -39,4 +40,6 @@ function togglePreview() {
   }
 }
 
-export function isPreviewActive() { return previewActive; }
+export function isPreviewActive() {
+  return previewActive;
+}

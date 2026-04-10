@@ -19,12 +19,12 @@ import urllib.request
 # ── Config ────────────────────────────────────────────────────────────
 
 MODELS = [
-    "dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1",
-    "zai-org/glm-4.6v-flash",
-    "openai/gpt-oss-20b",
+    "gpt-oss-20b-absolute-heresy-i1",
+    "cognitivecomputations_dolphin-mistral-24b-venice-edition",
+    "qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2",
     "qwen/qwen3.5-9b",
-    "ibm/granite-4-h-tiny",
-    "microsoft/phi-4-mini-reasoning",
+    "gemma-4-26b-a4b-it",
+    "gemma-4-e2b-it",
 ]
 
 PROMPTS = [

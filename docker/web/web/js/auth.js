@@ -40,29 +40,47 @@ function clearAuthMsg() {
 
 export async function checkAuth() {
   const token = localStorage.getItem('dartboard-jwt');
-  if (!token) { showAuthScreen(); return false; }
+  if (!token) {
+    showAuthScreen();
+    return false;
+  }
+
   try {
-    const res = await fetch('/auth/verify', { headers: { 'Authorization': 'Bearer ' + token } });
-    if (res.ok) { hideAuthScreen(); return true; }
+    const res = await fetch('/auth/verify', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (res.ok) {
+      hideAuthScreen();
+      return true;
+    }
   } catch {}
+
   localStorage.removeItem('dartboard-jwt');
   showAuthScreen();
   return false;
 }
 
 export async function authLogin() {
-  const user = document.getElementById('login-user').value.trim();
-  const pass = document.getElementById('login-pass').value;
-  if (!user || !pass) { showAuthMsg('Enter username and password', true); return; }
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+
+  if (!username || !password) {
+    showAuthMsg('Enter username and password', true);
+    return;
+  }
+
   const btn = document.getElementById('login-btn');
   btn.disabled = true;
   let banned = false;
+
   try {
     const res = await fetch('/auth/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: user, password: pass }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
     const data = await res.json();
+
     if (!res.ok) {
       showAuthMsg(data.error || 'Login failed', true);
       if (res.status === 403 && (data.error || '').includes('banned')) {
@@ -72,66 +90,106 @@ export async function authLogin() {
       }
       return;
     }
-    if (!data.token || data.token.length < 10) { showAuthMsg('Server returned invalid token', true); return; }
+
+    if (!data.token || data.token.length < 10) {
+      showAuthMsg('Server returned invalid token', true);
+      return;
+    }
+
     localStorage.setItem('dartboard-jwt', data.token);
-    document.cookie = 'dartboard_token=' + data.token + '; path=/; SameSite=Strict; max-age=' + (60*60*24*7);
+    document.cookie = 'dartboard_token=' + data.token
+      + '; path=/; SameSite=Strict; Secure; max-age=' + (60 * 60 * 24 * 7);
+
     hideAuthScreen();
     emit('auth:login');
-    toast('Welcome back, ' + user, 'success');
-  } catch (e) { showAuthMsg('Connection error', true); }
-  finally { if (!banned) btn.disabled = false; }
+    toast('Welcome back, ' + username, 'success');
+  } catch (err) {
+    showAuthMsg('Connection error', true);
+  } finally {
+    if (!banned) btn.disabled = false;
+  }
 }
 
 export async function authRegister() {
-  const user = document.getElementById('reg-user').value.trim();
-  const pass = document.getElementById('reg-pass').value;
-  const pass2 = document.getElementById('reg-pass2').value;
-  if (!user || !pass) { showAuthMsg('Fill in all fields', true); return; }
-  if (pass !== pass2) { showAuthMsg('Passwords do not match', true); return; }
+  const username = document.getElementById('reg-user').value.trim();
+  const password = document.getElementById('reg-pass').value;
+  const passwordConfirm = document.getElementById('reg-pass2').value;
+
+  if (!username || !password) {
+    showAuthMsg('Fill in all fields', true);
+    return;
+  }
+  if (password !== passwordConfirm) {
+    showAuthMsg('Passwords do not match', true);
+    return;
+  }
+
   const btn = document.getElementById('reg-btn');
   btn.disabled = true;
+
   try {
     const res = await fetch('/auth/register', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: user, password: pass }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
     });
     const data = await res.json();
-    if (!res.ok) { showAuthMsg(data.error || 'Registration failed', true); return; }
-    showAuthMsg(data.message, false);
+
+    if (!res.ok) {
+      showAuthMsg(data.error || 'Registration failed', true);
+      return;
+    }
+
+    showAuthMsg(data.message || 'Registration submitted', false);
     document.getElementById('reg-user').value = '';
     document.getElementById('reg-pass').value = '';
     document.getElementById('reg-pass2').value = '';
-  } catch (e) { showAuthMsg('Connection error', true); }
-  finally { btn.disabled = false; }
+  } catch (err) {
+    showAuthMsg('Connection error', true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 export function authLogout() {
   emit('auth:beforeLogout');
+
   localStorage.removeItem('dartboard-jwt');
   document.cookie = 'dartboard_token=; path=/; max-age=0';
+
+  // Reset application state
   state.currentConvId = null;
   state.allConversations = [];
   state.availableModels = [];
   state.selectedModel = null;
   state.selectedModelReady = false;
   state.pendingFiles = [];
+
+  // Clear UI
   document.getElementById('messages').textContent = '';
   document.getElementById('conv-list').textContent = '';
+
+  // Reset login form
   document.getElementById('login-user').value = '';
   document.getElementById('login-pass').value = '';
   document.getElementById('login-user').disabled = false;
   document.getElementById('login-pass').disabled = false;
   document.getElementById('login-btn').disabled = false;
+
   clearAuthMsg();
   showAuthScreen();
   emit('view:welcome');
 }
 
 export function initAuthKeys() {
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
     if (document.getElementById('auth-screen').classList.contains('hidden')) return;
-    if (!document.getElementById('auth-register').classList.contains('hidden')) authRegister();
-    else authLogin();
+
+    if (!document.getElementById('auth-register').classList.contains('hidden')) {
+      authRegister();
+    } else {
+      authLogin();
+    }
   });
 }

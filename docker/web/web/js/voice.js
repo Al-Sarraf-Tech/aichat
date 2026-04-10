@@ -5,6 +5,7 @@ import { toast } from './toasts.js';
 // ── Voice Input (Web Speech API) ─────────────────────────────────
 let recognition = null;
 let isListening = false;
+let _baseText = '';      // text in the input before voice session started
 
 export function initVoice() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -21,15 +22,15 @@ export function initVoice() {
 
   recognition.onresult = (e) => {
     const input = document.getElementById('input');
+    // Rebuild full transcript from all results (handles interim updates correctly)
     let transcript = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    for (let i = 0; i < e.results.length; i++) {
       transcript += e.results[i][0].transcript;
     }
     if (transcript) {
-      // Append to existing text
-      const existing = input.value;
-      const sep = existing && !existing.endsWith(' ') ? ' ' : '';
-      input.value = existing + sep + transcript;
+      // Replace interim text each time; _baseText holds what was in the box before
+      const sep = _baseText && !_baseText.endsWith(' ') ? ' ' : '';
+      input.value = _baseText + sep + transcript;
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 200) + 'px';
       emit('input:changed');
@@ -61,6 +62,8 @@ function toggleVoice() {
     isListening = false;
     btn.classList.remove('listening');
   } else {
+    const input = document.getElementById('input');
+    _baseText = input ? input.value : '';
     recognition.start();
     isListening = true;
     btn.classList.add('listening');

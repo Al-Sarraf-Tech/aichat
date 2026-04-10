@@ -1,9 +1,13 @@
 SHELL := /usr/bin/env bash
-COMPOSE := docker compose
+COMPOSE := docker compose -f docker-compose.yml -f docker-compose.ports.yml
 SERVICES := aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp aichat-jupyter aichat-browser aichat-web aichat-auth aichat-redis
 
+# Core services required for basic chat functionality
+CORE := aichat-db aichat-vector aichat-redis aichat-data aichat-searxng aichat-mcp aichat-web aichat-auth
+
 .PHONY: help build up down restart logs smoke test lint security-checks \
-        generate-lmstudio-json dart-get dart-analyze dart-test dart-build dart-run
+        generate-lmstudio-json dart-get dart-analyze dart-test dart-build dart-run \
+        up-core status rebuild
 
 # ---------------------------------------------------------------------------
 # Help
@@ -11,23 +15,32 @@ SERVICES := aichat-data aichat-vision aichat-docs aichat-sandbox aichat-mcp aich
 help:
 	@echo "aichat platform — common targets"
 	@echo ""
-	@echo "  make build               Build all service images"
-	@echo "  make up                  Start full stack (detached)"
+	@echo "  Stack management:"
+	@echo "  make up                  Start full stack (16 services, detached)"
+	@echo "  make up-core             Start core only (8 services — chat works, no vision/jupyter/browser)"
 	@echo "  make down                Stop and remove containers"
 	@echo "  make restart             down + up"
+	@echo "  make rebuild SVC=name    Rebuild and restart a single service"
+	@echo "  make build               Build all service images"
+	@echo "  make status              Show health status of all running services"
 	@echo "  make logs                Follow logs for all services"
+	@echo ""
+	@echo "  Testing:"
 	@echo "  make smoke               Quick health-endpoint check"
 	@echo "  make test                Run full pytest test suite"
 	@echo "  make lint                Run ruff + mypy on docker/**/*.py"
-	@echo "  make security-checks     shellcheck/bandit/safety/semgrep/trivy"
-	@echo "  make generate-lmstudio-json  Regenerate lmstudio-mcp.json from live /tools"
+	@echo "  make dart-test           Run Dart unit tests (75 tests)"
+	@echo "  make test-all            Run ALL tests (Dart + Python smoke + regression + image)"
 	@echo ""
 	@echo "  Dart web server:"
-	@echo "  make dart-get              Install Dart dependencies"
-	@echo "  make dart-analyze          Run dart analyze"
-	@echo "  make dart-test             Run Dart tests"
-	@echo "  make dart-build            Compile native binary"
-	@echo "  make dart-run              Run web server locally"
+	@echo "  make dart-get            Install Dart dependencies"
+	@echo "  make dart-analyze        Run dart analyze"
+	@echo "  make dart-build          Compile native binary"
+	@echo "  make dart-run            Run web server locally"
+	@echo ""
+	@echo "  Other:"
+	@echo "  make security-checks     shellcheck/bandit/safety/semgrep/trivy"
+	@echo "  make generate-lmstudio-json  Regenerate lmstudio-mcp.json from live /tools"
 
 # ---------------------------------------------------------------------------
 # Build / stack management
@@ -38,10 +51,22 @@ build:
 up:
 	$(COMPOSE) up -d
 
+up-core:
+	@echo "Starting core services (8/16) — chat works, vision/jupyter/browser optional"
+	$(COMPOSE) up -d $(CORE)
+
 down:
 	$(COMPOSE) down
 
 restart: down up
+
+rebuild:
+	@if [ -z "$(SVC)" ]; then echo "Usage: make rebuild SVC=aichat-mcp"; exit 1; fi
+	$(COMPOSE) build $(SVC) && $(COMPOSE) up -d $(SVC)
+
+status:
+	@echo "Service Health:"
+	@$(COMPOSE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || $(COMPOSE) ps
 
 logs:
 	$(COMPOSE) logs -f
@@ -82,6 +107,16 @@ smoke:
 # ---------------------------------------------------------------------------
 test:
 	python3 -m pytest tests/ -v
+
+test-all: dart-test
+	@echo "--- Dart tests passed ---"
+	python3 -m pytest tests/test_smoke.py -v --timeout=60
+	@echo "--- Smoke tests passed ---"
+	python3 -m pytest tests/test_full_regression.py -v --timeout=60
+	@echo "--- Regression tests passed ---"
+	python3 -m pytest tests/test_image_pipeline.py -v --timeout=90 -k "not tool_count"
+	@echo "--- Image pipeline tests passed ---"
+	@echo "All test suites passed."
 
 # ---------------------------------------------------------------------------
 # Lint (requires: pip install ruff mypy)

@@ -11,6 +11,12 @@ services:
     volumes:
       - aichatdb:/var/lib/postgresql/data
     restart: unless-stopped
+    mem_limit: 1g
+    logging: &default-logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aichat -d aichat"]
       interval: 10s
@@ -25,11 +31,13 @@ services:
     volumes:
       - qdrantdb:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" | timeout 2 bash -c \"exec 3<>/dev/tcp/localhost/6333; cat >&3; cat <&3\" | grep -q \"healthz check passed\"'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 3
     restart: unless-stopped
+    mem_limit: 2g
+    logging: *default-logging
 
   # ---------------------------------------------------------------------------
   # aichat-data: consolidated data service (port 8091)
@@ -61,6 +69,8 @@ services:
       - "${INTEL_VIDEO_GID:-39}"    # host video GID  — DRI card1
       - "${INTEL_RENDER_GID:-105}"  # host render GID — DRI renderD128 (Intel Arc OpenCL)
     restart: unless-stopped
+    mem_limit: 2g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8091/health', timeout=3)\""]
       interval: 15s
@@ -96,6 +106,8 @@ services:
       - "${INTEL_VIDEO_GID:-39}"    # host video GID  — DRI card1
       - "${INTEL_RENDER_GID:-105}"  # host render GID — DRI renderD128 (Intel Arc VA-API/OpenCL)
     restart: unless-stopped
+    mem_limit: 4g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health', timeout=3)\""]
       interval: 15s
@@ -132,6 +144,8 @@ services:
       - "${INTEL_VIDEO_GID:-39}"
       - "${INTEL_RENDER_GID:-105}"
     restart: unless-stopped
+    mem_limit: 1g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8101/health', timeout=3)\""]
       interval: 15s
@@ -160,6 +174,8 @@ services:
       - "${INTEL_VIDEO_GID:-39}"    # host video GID  — DRI card1
       - "${INTEL_RENDER_GID:-105}"  # host render GID — DRI renderD128 (Intel Arc OpenCL)
     restart: unless-stopped
+    mem_limit: 1g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8095/health', timeout=3)\""]
       interval: 15s
@@ -184,6 +200,8 @@ services:
       timeout: 8s
       retries: 5
       start_period: 30s
+    mem_limit: 512m
+    logging: *default-logging
 
   # aichat-mcp: MCP HTTP/SSE gateway (port 8096)
   #   Exposes all tools to LM Studio and other MCP clients.
@@ -192,7 +210,7 @@ services:
   aichat-mcp:
     build: ./docker/mcp
     ports:
-      - "0.0.0.0:8096:8096"
+      - "127.0.0.1:8096:8096"
     environment:
       # Consolidated service URLs
       DATABASE_URL:     http://aichat-data:8091
@@ -238,6 +256,7 @@ services:
       # Object/human detection
       DETECT_URL: http://aichat-vision:8099/detect
       # All tools are free/local — no paid API keys required.
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8200}"
       INTEL_GPU: "1"
       LIBVA_DRIVER_NAME: iHD
       # CLI agent chat (OAuth)
@@ -262,24 +281,30 @@ services:
       # Per-user workspace — scripts, images, documents
       - ./workspace:/workspace
     depends_on:
+      # Critical deps — MCP cannot function without these
       aichat-data:
-        condition: service_healthy
-      aichat-vision:
-        condition: service_healthy
-      aichat-docs:
-        condition: service_healthy
-      aichat-sandbox:
         condition: service_healthy
       aichat-vector:
         condition: service_healthy
       aichat-searxng:
         condition: service_healthy
+      # Important deps — MCP starts faster if these are ready
+      aichat-vision:
+        condition: service_started
+      aichat-docs:
+        condition: service_started
+      aichat-sandbox:
+        condition: service_started
+      # Enhancement deps — MCP degrades gracefully without these
       aichat-minio:
-        condition: service_healthy
+        condition: service_started
       aichat-browser:
-        condition: service_healthy
+        condition: service_started
       aichat-jupyter:
-        condition: service_healthy
+        condition: service_started
+    stop_grace_period: 10s
+    mem_limit: 4g
+    logging: *default-logging
     # Intel Arc A380: card1 (video) + renderD128 (render/OpenCL).
     devices:
       - ${INTEL_DRI_DEVICE:-/dev/dri}:${INTEL_DRI_DEVICE:-/dev/dri}
@@ -329,6 +354,8 @@ services:
     volumes:
       - whatsappauth:/data/auth
     restart: unless-stopped
+    mem_limit: 512m
+    logging: *default-logging
 
   # ---------------------------------------------------------------------------
   # aichat-jupyter: persistent Python kernel service (port 8098)
@@ -340,6 +367,8 @@ services:
     environment:
       JUPYTER_API_KEY: ${JUPYTER_API_KEY:-}
     restart: unless-stopped
+    mem_limit: 2g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8098/health', timeout=3)\""]
       interval: 15s
@@ -354,6 +383,8 @@ services:
   aichat-browser:
     build: ./docker/browser
     restart: unless-stopped
+    mem_limit: 2g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8104/health', timeout=3)\""]
       interval: 15s
@@ -374,6 +405,8 @@ services:
     volumes:
       - /mnt/nvmeINT/aichat/redis:/data
     restart: unless-stopped
+    mem_limit: 768m
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
       interval: 10s
@@ -394,6 +427,8 @@ services:
     volumes:
       - miniodata:/data
     restart: unless-stopped
+    mem_limit: 1g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9002/minio/health/live || exit 1"]
       interval: 15s
@@ -418,6 +453,8 @@ services:
     #   - "${INTEL_VIDEO_GID:-39}"
     #   - "${INTEL_RENDER_GID:-105}"
     restart: unless-stopped
+    mem_limit: 2g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8105/health || exit 1"]
       interval: 15s
@@ -435,6 +472,7 @@ services:
       dockerfile: docker/web/Dockerfile
     environment:
       PORT: "8200"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8200}"
       MCP_URL: http://aichat-mcp:8096
       TOOL_ROUTER_URL: http://host.docker.internal:1235
       LM_STUDIO_URL: http://192.168.50.2:1234
@@ -453,6 +491,8 @@ services:
       - /mnt/nvmeINT/aichat/web-db:/app/data
       - /home/jalsarraf/aipictures:/app/pictures
     restart: unless-stopped
+    mem_limit: 512m
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8200/health || exit 1"]
       interval: 15s
@@ -483,6 +523,8 @@ services:
       aichat-db:
         condition: service_healthy
     restart: unless-stopped
+    mem_limit: 256m
+    logging: *default-logging
 
   # ---------------------------------------------------------------------------
   # aichat-comfyui: ComfyUI image generation server (NVIDIA GPU required)
@@ -505,6 +547,8 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+    mem_limit: 8g
+    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8388/system_stats || exit 1"]
       interval: 30s

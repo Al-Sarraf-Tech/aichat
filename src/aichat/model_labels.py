@@ -12,10 +12,10 @@ def model_capability_emojis(name: str) -> list[str]:
     if re.search(r"\bvl\b|-vl-|vision|4v|4\.6v|vlm", lowered):
         emojis.append("\U0001f441\ufe0f")  # eye
     # Reasoning / thinking detection
-    if re.search(r"reason|think|qwen3\.5|phi-4|magistral|ministral|glm", lowered):
+    if re.search(r"reason|think|qwen3\.5|phi-4|magistral|ministral|gemma-4|glm", lowered):
         emojis.append("\U0001f9e0")  # brain
     # Uncensored / unrestricted
-    if "dolphin" in lowered or "uncensored" in lowered:
+    if "dolphin" in lowered or "uncensored" in lowered or "heresy" in lowered:
         emojis.append("\U0001f513")  # unlocked
     # Tool use (most LLMs, skip for embeddings)
     if "embed" not in lowered:

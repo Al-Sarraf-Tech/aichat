@@ -59,7 +59,7 @@ class ModelProfile {
 
 const _builtinProfiles = <String, ModelProfile>{
   // ── Strong models: Default tier (7) + Extended (media, data) = 9 tools ──
-  'openai/gpt-oss-20b': ModelProfile(
+  'gpt-oss-20b-absolute-heresy-i1': ModelProfile(
     temperature: 0.7,
     maxTokens: 4096,
     supportsTools: true,
@@ -68,23 +68,33 @@ const _builtinProfiles = <String, ModelProfile>{
       'web', 'image', 'browser', 'research', 'code', 'document', 'memory',
       'media', 'data',
     ], // 9 — Default tier + extended
-    notes: 'LLM, MXFP4, 131K ctx, strong general model',
+    notes: 'LLM, MXFP4, 20B, uncensored heresy variant, 131K ctx',
   ),
-  'dolphin-mistral-glm-4.7-flash-24b-venice-edition-thinking-uncensored-i1':
-      ModelProfile(
+  'cognitivecomputations_dolphin-mistral-24b-venice-edition': ModelProfile(
     temperature: 0.7,
     maxTokens: 4096,
     supportsTools: true,
-    supportsReasoning: true, // new model has thinking capability
+    supportsReasoning: true,
     enforceTools: true,
     allowedTools: [
       'web', 'image', 'browser', 'research', 'code', 'document', 'memory',
       'media', 'data',
     ], // 9 — Default tier + extended, enforced
-    notes: 'LLM, Q4_K_S, 32K ctx, UNRESTRICTED, thinking, tool_choice=required',
+    notes: 'LLM, 24B, UNRESTRICTED, thinking, tool_choice=required',
+  ),
+  'qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2': ModelProfile(
+    temperature: 0.5,
+    maxTokens: 8192,
+    supportsTools: true,
+    supportsReasoning: true,
+    allowedTools: [
+      'web', 'image', 'browser', 'research', 'code', 'document', 'memory',
+      'media', 'data',
+    ], // 9 — strong reasoning, full tool set
+    notes: 'LLM, 27B, reasoning distilled from Claude Opus, high maxTokens',
   ),
 
-  // ── Reasoning VLMs: Default tier (7) tools ──
+  // ── Mid-tier reasoning models: Default tier (7) tools ──
   'qwen/qwen3.5-9b': ModelProfile(
     temperature: 0.5,
     maxTokens: 4096,
@@ -95,19 +105,19 @@ const _builtinProfiles = <String, ModelProfile>{
     ], // 7 — Default tier only
     notes: 'VLM, Q4_K_M, 262K ctx, reasoning',
   ),
-  'zai-org/glm-4.6v-flash': ModelProfile(
+  'gemma-4-26b-a4b-it': ModelProfile(
     temperature: 0.5,
-    maxTokens: 8192, // needs headroom for reasoning_content tokens
+    maxTokens: 4096,
     supportsTools: true,
     supportsReasoning: true,
     allowedTools: [
-      'web', 'image', 'browser', 'research', 'document', 'data', 'media',
-    ], // 7 — probed subset
-    notes: 'VLM, Q8_0, 131K ctx, reasoning, needs high maxTokens',
+      'web', 'image', 'browser', 'research', 'code', 'document', 'memory',
+    ], // 7 — Default tier
+    notes: 'LLM, MoE 26B total / 4B active, reasoning',
   ),
 
-  // ── Small / weak models: reduced tool sets ──
-  'ibm/granite-4-h-tiny': ModelProfile(
+  // ── Small models: reduced tool sets ──
+  'gemma-4-e2b-it': ModelProfile(
     temperature: 0.7,
     maxTokens: 2048,
     supportsTools: true,
@@ -117,21 +127,8 @@ const _builtinProfiles = <String, ModelProfile>{
     ], // 5 — minimal reliable set
     promptSize: 'condensed',
     systemPromptMaxChars: 4000,
-    notes: 'LLM, Q8_0, 1M ctx, tiny, condensed prompt',
+    notes: 'LLM, 2B, amarillo Arc A380, light tasks, condensed prompt',
   ),
-  'microsoft/phi-4-mini-reasoning': ModelProfile(
-    temperature: 0.3,
-    maxTokens: 4096,
-    supportsTools: true,
-    supportsReasoning: true,
-    allowedTools: ['web', 'browser'], // 2 — very weak tools
-    promptSize: 'condensed',
-    notes: 'LLM, Q8_0, 131K ctx, reasoning, very weak tools',
-  ),
-
-  // ── Stale models (not in current LM Studio inventory, kept for reference) ──
-  // 'mistralai/ministral-3-14b-reasoning': VLM, 14B reasoning, needs probing
-  // 'deepseek/deepseek-r1-0528-qwen3-8b': LLM, 8B reasoning, tool calling broken
 };
 
 const defaultProfile = ModelProfile(
@@ -191,6 +188,7 @@ ModelProfile getProfile(String modelId) {
       lm.contains('qwen3') ||
       lm.contains('phi-4') ||
       lm.contains('magistral') || lm.contains('ministral') ||
+      lm.contains('gemma-4') ||
       lm.contains('glm')) {
     return _reasoningProfile;
   }
