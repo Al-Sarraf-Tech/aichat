@@ -1,0 +1,9 @@
+{"type":"tool_use","tool":"Read","tool_input":{"file_path":"/app/main.py"}}
+{"type":"tool_result","content":[{"type":"text","text":"file contents here"}]}
+{"type":"tool_use","tool":"Edit","tool_input":{"file_path":"/app/main.py","old_string":"old","new_string":"new"}}
+{"type":"tool_use","tool":"Bash","tool_input":{"command":"pytest tests/ -v"}}
+{"type":"tool_result","content":[{"type":"text","text":"3 passed"}]}
+{"type":"tool_use","tool":"Bash","tool_input":{"command":"git commit -m 'fix: stuff'"}}
+{"type":"tool_result","content":[{"type":"text","text":"[main abc1234] fix: stuff\n 1 file changed"}]}
+{"type":"assistant","content":"I've fixed the issue in main.py."}
+{"type":"result","result":"Task completed successfully."}

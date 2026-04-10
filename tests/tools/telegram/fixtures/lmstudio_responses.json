@@ -1,0 +1,26 @@
+{
+  "chat_completion_success": {
+    "id": "chatcmpl-abc123",
+    "object": "chat.completion",
+    "created": 1712700000,
+    "model": "gemma-4-e2b-it",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"type\": \"tool\", \"tool\": \"monitor\", \"action\": \"thermals\"}"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
+  },
+  "chat_completion_error": {
+    "error": {
+      "message": "Model not loaded",
+      "type": "invalid_request_error",
+      "code": "model_not_found"
+    }
+  }
+}
