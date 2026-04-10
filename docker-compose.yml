@@ -192,7 +192,7 @@ services:
   aichat-mcp:
     build: ./docker/mcp
     ports:
-      - "127.0.0.1:8096:8096"
+      - "0.0.0.0:8096:8096"
     environment:
       # Consolidated service URLs
       DATABASE_URL:     http://aichat-data:8091
@@ -250,6 +250,7 @@ services:
       TEAM_GEMINI_MODEL: "${TEAM_GEMINI_MODEL:-gemini-2.5-flash}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

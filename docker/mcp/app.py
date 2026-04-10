@@ -33,7 +33,7 @@ from __future__ import annotations
 # --- New modular tools ---
 from tools import TOOL_SCHEMAS, TOOL_HANDLERS  # noqa: E402
 import tools.ssh, tools.monitor, tools.git, tools.notify, tools.iot, tools.log  # noqa: F401,E402
-from tools.telegram_bot import poll_loop as _telegram_poll_loop  # noqa: E402
+from tools.telegram import poll_loop as _telegram_poll_loop  # noqa: E402
 
 import asyncio
 import base64
