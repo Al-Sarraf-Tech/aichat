@@ -31,10 +31,10 @@ services:
     volumes:
       - qdrantdb:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'echo -e \"GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n\" | timeout 2 bash -c \"exec 3<>/dev/tcp/localhost/6333; cat >&3; cat <&3\" | grep -q passed'"]
       interval: 10s
-      timeout: 3s
-      retries: 3
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     mem_limit: 2g
     logging: *default-logging
