@@ -210,7 +210,7 @@ services:
   aichat-mcp:
     build: ./docker/mcp
     ports:
-      - "127.0.0.1:8096:8096"
+      - "0.0.0.0:8096:8096"  # LAN-accessible for LM Studio on dominus
     environment:
       # Consolidated service URLs
       DATABASE_URL:     http://aichat-data:8091
