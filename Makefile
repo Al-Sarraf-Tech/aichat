@@ -68,6 +68,10 @@ status:
 	@echo "Service Health:"
 	@$(COMPOSE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || $(COMPOSE) ps
 
+health:
+	@echo "Probing all services via /api/stack-health..."
+	@curl -sf http://localhost:8200/api/stack-health 2>/dev/null | python3 -m json.tool || echo "Stack health endpoint unreachable (is aichat-web running?)"
+
 logs:
 	$(COMPOSE) logs -f
 

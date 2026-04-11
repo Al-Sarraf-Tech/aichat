@@ -301,11 +301,22 @@ def login():
     clear_failed_attempts(cur, ip)
     token = create_jwt(user['id'], user['username'], user['role'])
     log.info(f'Login: {username} from {ip}')
-    return jsonify({
+    resp = make_response(jsonify({
         'token': token,
         'username': user['username'],
         'role': user['role'],
-    })
+    }))
+    # Set HttpOnly cookie — JS cannot read this, preventing XSS token theft.
+    # The JS-set cookie (non-HttpOnly) is kept for API fetch Authorization header.
+    resp.set_cookie(
+        'dartboard_token', token,
+        httponly=True,
+        secure=True,
+        samesite='Strict',
+        max_age=60 * 60 * 24 * 7,  # 7 days
+        path='/',
+    )
+    return resp
 
 
 @app.route('/auth/verify', methods=['GET'])

@@ -53,6 +53,7 @@ class AppRouter {
     );
     _router = Router()
       ..get('/health', _health)
+      ..get('/api/stack-health', _stackHealth)
       ..get('/api/conversations', _listConversations)
       ..post('/api/conversations', _chat.createConversation)
       ..get('/api/conversations/<id>', _getConversation)
@@ -197,9 +198,53 @@ class AppRouter {
     return _json({
       'ok': true,
       'service': 'dartboard',
-      'version': '1.0.0',
+      'version': '2.0.0',
       'lm_studio': config.lmStudioUrl,
       'mcp': config.mcpUrl,
+    });
+  }
+
+  /// Aggregated health check — probes all backend services from a single call.
+  /// Returns per-service status so the frontend or monitoring can show a dashboard.
+  Future<Response> _stackHealth(Request request) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    final results = <String, dynamic>{};
+
+    Future<String> probe(String name, String url) async {
+      try {
+        final req = await client.getUrl(Uri.parse(url));
+        final resp = await req.close().timeout(const Duration(seconds: 3));
+        if (resp.statusCode == 200) return 'ok';
+        return 'error:${resp.statusCode}';
+      } catch (e) {
+        return 'unreachable';
+      }
+    }
+
+    // Probe all services in parallel
+    final probes = await Future.wait([
+      probe('mcp', '${config.mcpUrl}/health'),
+      probe('lm_studio', '${config.lmStudioUrl}/v1/models'),
+      probe('data', 'http://aichat-data:8091/health'),
+      probe('vision', 'http://aichat-vision:8099/health'),
+      probe('docs', 'http://aichat-docs:8101/health'),
+      probe('sandbox', 'http://aichat-sandbox:8095/health'),
+      probe('browser', 'http://aichat-browser:8104/health'),
+      probe('inference', 'http://aichat-inference:8105/health'),
+      probe('jupyter', 'http://aichat-jupyter:8098/health'),
+    ]);
+
+    final names = ['mcp', 'lm_studio', 'data', 'vision', 'docs', 'sandbox', 'browser', 'inference', 'jupyter'];
+    for (var i = 0; i < names.length; i++) {
+      results[names[i]] = probes[i];
+    }
+    results['web'] = 'ok'; // we're responding, so we're alive
+
+    final allOk = probes.every((s) => s == 'ok');
+    return _json({
+      'ok': allOk,
+      'services': results,
+      'checked_at': DateTime.now().toUtc().toIso8601String(),
     });
   }
 
