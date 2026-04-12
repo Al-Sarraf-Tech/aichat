@@ -118,8 +118,16 @@ test-all: dart-test
 	@echo "--- Smoke tests passed ---"
 	python3 -m pytest tests/test_full_regression.py -v --timeout=60
 	@echo "--- Regression tests passed ---"
-	python3 -m pytest tests/test_image_pipeline.py -v --timeout=90 -k "not tool_count"
+	python3 -m pytest tests/test_image_pipeline.py -v --timeout=90
 	@echo "--- Image pipeline tests passed ---"
+	python3 -m pytest tests/test_tool_priority.py tests/test_architecture.py tests/test_tool_modules.py -v --timeout=30
+	@echo "--- Unit/architecture tests passed ---"
+	python3 -m pytest tests/tools/ -v --timeout=60
+	@echo "--- MCP tool tests passed ---"
+	python3 -m pytest tests/test_model_e2e.py -v --timeout=120
+	@echo "--- Model E2E tests passed ---"
+	python3 -m pytest tests/test_image_rendering_e2e.py -v --timeout=90
+	@echo "--- Image rendering tests passed ---"
 	@echo "All test suites passed."
 
 # ---------------------------------------------------------------------------

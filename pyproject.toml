@@ -35,6 +35,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["docker/mcp"]
+asyncio_mode = "auto"
 markers = [
   "smoke: smoke tests that require all Docker services to be running",
   "regression: full regression suite covering every MCP tool and service endpoint",
