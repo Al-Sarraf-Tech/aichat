@@ -9,6 +9,16 @@ export function esc(text) {
   return div.innerHTML;
 }
 
+// ── DOMPurify: force external links to open in new tabs ─────────
+if (typeof DOMPurify !== 'undefined') {
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && node.getAttribute('href')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+}
+
 // ── Markdown Cache ──────────────────────────────────────────────
 const _mdCache = new Map();
 const MD_CACHE_MAX = 200;
@@ -27,7 +37,7 @@ export function renderMd(text) {
     const safe = typeof DOMPurify !== 'undefined'
       ? DOMPurify.sanitize(html, {
           ADD_TAGS: ['img'],
-          ADD_ATTR: ['src', 'alt', 'class', 'loading', 'decoding'],
+          ADD_ATTR: ['src', 'alt', 'class', 'loading', 'decoding', 'target', 'rel'],
         })
       : html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 

@@ -65,7 +65,14 @@ window.addEventListener('unhandledrejection', function (e) {
 // ── Marked config ────────────────────────────────────────────────────────────
 
 try {
-  if (typeof marked !== 'undefined') marked.use({ breaks: true, gfm: true });
+  if (typeof marked !== 'undefined') {
+    const renderer = new marked.Renderer();
+    renderer.link = ({ href, title, text }) => {
+      const t = title ? ` title="${title}"` : '';
+      return `<a href="${href}"${t} target="_blank" rel="noopener noreferrer">${text}</a>`;
+    };
+    marked.use({ breaks: true, gfm: true, renderer });
+  }
 } catch (e) {
   console.warn('marked.use failed:', e);
 }
