@@ -276,8 +276,9 @@ services:
       # Read/write the browser screenshot workspace
       - /docker/human_browser/workspace:/browser-workspace
       - /home/jalsarraf/aipictures:/app/pictures
-      # SSH key for CLI agent chat (Claude, Codex, Gemini)
+      # SSH key for CLI agent chat (fallback path)
       - /home/jalsarraf/.ssh/automation:/run/secrets/team_ssh_key:ro
+      # SSH key for CLI agent chat (Claude, Codex, Gemini via SSH ControlMaster)
       # Per-user workspace — scripts, images, documents
       - ./workspace:/workspace
     depends_on:

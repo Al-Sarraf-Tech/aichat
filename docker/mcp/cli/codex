@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Wrapper: run codex from mounted package (ESM)
+exec node --input-type=module -e "import '/app/cli/codex-pkg/bin/codex.js'" -- "$@"
