@@ -65,6 +65,16 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_IMAGE_MODEL = os.environ.get("TEAM_OPENAI_IMAGE_MODEL", "gpt-5.4")
 
+# SearXNG for context enrichment — gives CLI agents access to current web info
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://aichat-searxng:8080")
+
+# Keywords that signal the query needs live web context
+_NEEDS_WEB_PATTERNS = re.compile(
+    r"\b(latest|news|today|current|recent|update|happening|2025|2026|2027|"
+    r"now|this week|this month|right now|breaking|live)\b",
+    re.IGNORECASE,
+)
+
 # Arc A380 (local Docker network)
 ARC_VISION_URL = os.environ.get("VISION_GEN_URL", "http://aichat-vision:8099/generate")
 ARC_CLIP_URL = os.environ.get("CLIP_URL", "http://aichat-vision:8099/clip")
@@ -158,6 +168,48 @@ class _CircuitBreaker:
                         self._failures, self.recovery_s)
 
 _ssh_cb = _CircuitBreaker()
+
+
+# ---------------------------------------------------------------------------
+# Context Enrichment — give CLI agents access to current web information
+# ---------------------------------------------------------------------------
+
+async def _enrich_with_web(query: str, *, max_results: int = 5) -> str:
+    """Run a quick SearXNG search and return formatted context to prepend to prompt.
+
+    Returns empty string if the query doesn't need web context or search fails.
+    This gives CLI agents (Claude/Codex/Gemini) access to current information
+    they'd otherwise miss due to training cutoff.
+    """
+    if not _NEEDS_WEB_PATTERNS.search(query):
+        return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(f"{SEARXNG_URL}/search", params={
+                "q": query, "format": "json", "safesearch": "0",
+                "language": "en", "categories": "general,news",
+            })
+            if not resp.is_success:
+                return ""
+            results = resp.json().get("results", [])[:max_results]
+            if not results:
+                return ""
+
+            lines = ["[Web search results (live, use these to answer):]"]
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "").strip()
+                url = r.get("url", "")
+                snippet = r.get("content", "").strip()[:300]
+                lines.append(f"{i}. {title}\n   {url}\n   {snippet}")
+
+            context = "\n\n".join(lines)
+            log.info("web_enrich query=%r results=%d chars=%d", query[:60], len(results), len(context))
+            return context
+    except Exception as exc:
+        log.debug("web_enrich failed: %s", exc)
+        return ""
+
 
 # SSH exit codes that indicate transient connection failure (not CLI errors)
 _SSH_TRANSIENT_CODES = {255}
@@ -491,6 +543,12 @@ async def chat(message: str, *, agent: str, model: str = "",
     if len(context) > _MAX_CONTEXT:
         context = context[:_MAX_CONTEXT]
 
+    # Enrich CLI agent prompts with live web context
+    if agent in ("claude", "codex", "gemini"):
+        web_context = await _enrich_with_web(message)
+        if web_context:
+            context = f"{web_context}\n\n{context}" if context else web_context
+
     full_prompt = f"{context}\n\n{message}" if context else message
 
     if agent == "claude":
@@ -601,13 +659,25 @@ async def stream_qwen(
 async def chat_stream(
     message: str, *, agent: str, model: str = "", effort: str = "", context: str = "",
 ) -> AsyncIterator[str]:
-    """Streaming variant of chat(). Yields text chunks as the agent produces them."""
+    """Streaming variant of chat(). Yields text chunks as the agent produces them.
+
+    For CLI agents (claude/codex/gemini), queries needing current information
+    are automatically enriched with live web search results so the model can
+    answer questions beyond its training cutoff.
+    """
     if agent not in _VALID_AGENTS:
         raise ValueError(f"Unknown agent: {agent}. Valid: {', '.join(sorted(_VALID_AGENTS))}")
     if len(message) > _MAX_INPUT:
         message = message[:_MAX_INPUT]
     if len(context) > _MAX_CONTEXT:
         context = context[:_MAX_CONTEXT]
+
+    # Enrich CLI agent prompts with live web context when query needs current info
+    if agent in ("claude", "codex", "gemini"):
+        web_context = await _enrich_with_web(message)
+        if web_context:
+            context = f"{web_context}\n\n{context}" if context else web_context
+
     full_prompt = f"{context}\n\n{message}" if context else message
 
     if agent == "claude":
