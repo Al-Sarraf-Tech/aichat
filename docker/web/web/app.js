@@ -64,6 +64,11 @@ window.addEventListener('unhandledrejection', function (e) {
 
 // ── Marked config ────────────────────────────────────────────────────────────
 
+// ── Vendor library boot check ─────────────────────────────────────────────────
+if (typeof marked === 'undefined') console.error('[aichat] marked.js not loaded — markdown will render as escaped text');
+if (typeof DOMPurify === 'undefined') console.error('[aichat] DOMPurify not loaded — HTML sanitization disabled');
+if (typeof hljs === 'undefined') console.warn('[aichat] highlight.js not loaded — code blocks will not be highlighted');
+
 try {
   if (typeof marked !== 'undefined') {
     const renderer = new marked.Renderer();
