@@ -17,8 +17,6 @@ from tools import TOOL_HANDLERS  # type: ignore[import]
 from tools._helpers import text as _text, get_client, DATABASE_URL, BROWSER_URL  # type: ignore[import]
 from tools._search import (  # type: ignore[import]
     normalize_search_query,
-    search_terms,
-    query_preferred_domains,
     url_has_explicit_content,
     searxng_search,
     extract_ddg_links,
@@ -81,9 +79,6 @@ async def _web_search(args: dict[str, Any]) -> list[dict[str, Any]]:
     max_chars = int(args.get("max_chars", 4000))
     max_chars = max(500, min(max_chars, 16000))
     from urllib.parse import quote_plus as _qp
-
-    q_terms = search_terms(query)
-    pref = query_preferred_domains(query)
 
     def _fmt_links(
         links: "list[tuple[str, str]]",
