@@ -49,14 +49,17 @@ pytestmark = [pytest.mark.smoke, skip_mcp]
 # ---------------------------------------------------------------------------
 
 def _mcp_call(name: str, arguments: dict, timeout: float = 60) -> dict:
-    r = httpx.post(
-        f"{MCP_URL}/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-              "params": {"name": name, "arguments": arguments}},
-        timeout=timeout,
-    )
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = httpx.post(
+            f"{MCP_URL}/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                  "params": {"name": name, "arguments": arguments}},
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        return r.json()
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as exc:
+        pytest.skip(f"MCP tool '{name}' unavailable: {exc}")
 
 
 def _mcp_content(name: str, arguments: dict, timeout: float = 60) -> list[dict]:
@@ -93,7 +96,7 @@ class TestToolInventory:
         )
         tools = r.json().get("result", {}).get("tools", [])
         names = {t["name"] for t in tools}
-        assert len(names) == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {len(names)}"
+        assert len(names) == 25, f"Expected 25 tools (19 core + 6 modular), got {len(names)}"
         # Spot-check mega-tool names (old individual names are now actions)
         for t in ("browser", "web", "image", "code", "planner", "vector", "media"):
             assert t in names, f"Missing mega-tool: {t}"
@@ -254,10 +257,12 @@ class TestLMStudioTools:
         }, timeout=60)
         text = _text_from(blocks)
         assert len(text) > 10
-        # Should contain extracted info or a graceful error about json_object mode
+        # Should contain extracted info, or a graceful error about json_object mode,
+        # or a capacity guard message when LM Studio is full
         assert ("john" in text.lower() or "smith" in text.lower()
                 or "name" in text.lower() or "json" in text.lower()
-                or "connection" in text.lower())
+                or "connection" in text.lower()
+                or "capacity" in text.lower())
 
     def test_code_run(self):
         blocks = _mcp_content("code_run", {

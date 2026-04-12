@@ -88,11 +88,16 @@ docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d
 ## Test
 
 ```bash
-dart test test/dart/                                                          # 75 unit tests (db+profiles+sanitizer+helpers)
-python3 -m pytest tests/test_smoke.py -v --timeout=60                         # 17 service health
-python3 -m pytest tests/test_full_regression.py -v --timeout=60               # 92 regression
-python3 -m pytest tests/test_image_pipeline.py -v --timeout=90                # 161 image tools
-python3 -m pytest test/test_playwright_e2e.py -v --timeout=300                # 14 browser E2E
+dart test test/dart/                                                          # 82 unit tests (db+profiles+sanitizer+helpers+image)
+python3 -m pytest tests/test_smoke.py -v --timeout=60                         # 19 service health
+python3 -m pytest tests/test_full_regression.py -v --timeout=60               # 96 regression
+python3 -m pytest tests/test_image_pipeline.py -v --timeout=90               # 184 image tools
+python3 -m pytest tests/test_model_e2e.py -v --timeout=120                   # 70 model E2E (all LLMs)
+python3 -m pytest tests/test_image_rendering_e2e.py -v --timeout=90          # 17 image rendering
+python3 -m pytest tests/test_tool_priority.py -v --timeout=30                # 18 tool routing
+python3 -m pytest tests/tools/ -v --timeout=60                               # 177 MCP tool unit tests
+python3 -m pytest test/test_playwright_e2e.py -v --timeout=300               # 14 browser E2E
+python3 -m pytest tests/test_dartboard_e2e.py -v --timeout=180               # 13 dartboard E2E
 ```
 
 ## Lint

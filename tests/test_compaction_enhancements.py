@@ -171,7 +171,6 @@ class TestEnhancedSourceInspection:
         assert "compact_summary" in self._db(), \
             "compact_summary column not found in docker/data/app.py"
 
-    @pytest.mark.xfail(reason="compact endpoint not yet in data service")
     def test_compact_endpoint_in_db(self):
         assert "/compact" in self._db(), \
             "PATCH /compact endpoint not found in docker/data/app.py"

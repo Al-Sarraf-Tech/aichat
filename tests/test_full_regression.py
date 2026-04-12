@@ -137,7 +137,7 @@ class TestServiceHealth:
         assert r.status_code == 200
         body = r.json()
         assert body.get("ok") is True or body.get("status") == "ok", f"Unexpected health body: {body}"
-        assert body.get("tools", 0) == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {body.get('tools')}"
+        assert body.get("tools", 0) == 25, f"Expected 25 tools (19 core + 6 modular), got {body.get('tools')}"
 
     def test_mcp_tools_list(self):
         if not _reachable(f"{MCP_URL}/health"):
@@ -147,13 +147,13 @@ class TestServiceHealth:
                        timeout=TIMEOUT)
         assert r.status_code == 200
         tools = r.json()["result"]["tools"]
-        assert len(tools) == 19, f"Expected 19 tools (16 mega + chat + image_pipeline + workspace), got {len(tools)}"
+        assert len(tools) == 25, f"Expected 25 tools (19 core + 6 modular), got {len(tools)}"
         names = {t["name"] for t in tools}
         for expected in ("web", "browser", "image", "document", "media", "data",
                          "memory", "knowledge", "vector", "code", "custom_tools",
                          "planner", "jobs", "research", "think", "system",
-                         "chat", "image_pipeline",
-                         "workspace"):
+                         "chat", "image_pipeline", "workspace",
+                         "git", "monitor", "notify", "ssh", "iot", "log"):
             assert expected in names, f"Tool '{expected}' missing"
 
 

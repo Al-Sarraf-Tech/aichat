@@ -9,7 +9,7 @@ Requires:
   - Auth proxy at :8200, admin panel at :8247
 
 Run:
-    pytest tests/test_dartboard_e2e.py -v --timeout=180
+    pytest tests/test_dartboard_e2e.py -v --timeout=60
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ skip_no_mcp = pytest.mark.skipif(not _mcp_reachable(), reason="MCP not reachable
 
 async def _do_login(page: "Page") -> None:
     """Login to Dartboard via the auth screen."""
-    await page.goto(_AUTH_URL)
+    await page.goto(_AUTH_URL, timeout=10000)
     await page.wait_for_selector('#login-user', timeout=5000)
     await page.fill('#login-user', _TEST_USER)
     await page.fill('#login-pass', _TEST_PASS)
@@ -81,27 +81,33 @@ class TestLogin:
     """Test the login flow via Playwright."""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_login_page_loads(self):
         """Auth proxy serves a login page."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            resp = await page.goto(_AUTH_URL)
-            assert resp is not None
-            assert resp.status == 200
-            await page.wait_for_selector('#login-user', timeout=5000)
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                resp = await page.goto(_AUTH_URL, timeout=8000)
+                assert resp is not None
+                assert resp.status == 200
+                await page.wait_for_selector('#login-user', timeout=5000)
+            finally:
+                await browser.close()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_login_and_redirect(self):
         """Successful login stores JWT and loads Dartboard."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await _do_login(page)
-            # #app should be visible after login
-            await page.wait_for_selector('#app:not(.hidden)', timeout=10000)
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await _do_login(page)
+                # #app should be visible after login
+                await page.wait_for_selector('#app:not(.hidden)', timeout=10000)
+            finally:
+                await browser.close()
 
 
 # ---------------------------------------------------------------------------
@@ -114,46 +120,55 @@ class TestModelSelector:
     """Test cloud model selection in the Dartboard dropdown."""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_cloud_section_in_dropdown(self):
         """Model dropdown should show Cloud Models section."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await _do_login(page)
-            await page.click('#model-btn')
-            await page.wait_for_timeout(500)
-            body = await page.content()
-            assert "Cloud Models" in body, "Cloud Models section missing from dropdown"
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await _do_login(page)
+                await page.click('#model-btn')
+                await page.wait_for_timeout(500)
+                body = await page.content()
+                assert "Cloud Models" in body, "Cloud Models section missing from dropdown"
+            finally:
+                await browser.close()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_providers_listed(self):
         """Claude, Codex, Gemini, and Qwen should appear in the dropdown."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await _do_login(page)
-            await page.click('#model-btn')
-            await page.wait_for_timeout(500)
-            body = await page.content()
-            for agent in ["Claude", "GPT-5.4", "Gemini", "Qwen"]:
-                assert agent in body, f"Model '{agent}' missing from dropdown"
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await _do_login(page)
+                await page.click('#model-btn')
+                await page.wait_for_timeout(500)
+                body = await page.content()
+                for agent in ["Claude", "GPT-5.4", "Gemini", "Qwen"]:
+                    assert agent in body, f"Model '{agent}' missing from dropdown"
+            finally:
+                await browser.close()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_select_cloud_model(self):
         """Selecting a cloud model should mark it as ready."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await _do_login(page)
-            await page.click('#model-btn')
-            await page.wait_for_timeout(500)
-            await page.locator('.api-item').first.click()
-            await page.wait_for_timeout(1000)
-            body = await page.content()
-            assert "ready" in body.lower()
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await _do_login(page)
+                await page.click('#model-btn')
+                await page.wait_for_timeout(500)
+                await page.locator('.api-item').first.click()
+                await page.wait_for_timeout(1000)
+                body = await page.content()
+                assert "ready" in body.lower()
+            finally:
+                await browser.close()
 
 
 # ---------------------------------------------------------------------------
@@ -173,31 +188,37 @@ class TestDoubleSubmitPrevention:
         await page.wait_for_timeout(1000)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_sendlock_exists(self):
-        """The _sendLock variable should exist in the JS."""
+        """The sendLock property should exist on the state object in the JS."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await self._login_and_select_model(page)
-            has_lock = await page.evaluate("typeof _sendLock !== 'undefined'")
-            assert has_lock, "_sendLock variable missing from app.js"
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await self._login_and_select_model(page)
+                has_lock = await page.evaluate("typeof state !== 'undefined' && 'sendLock' in state")
+                assert has_lock, "state.sendLock property missing from app state"
+            finally:
+                await browser.close()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_rapid_enter_sends_only_once(self):
         """Pressing Enter 5 times rapidly should only send 1 message."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await self._login_and_select_model(page)
-            input_el = page.locator('#input')
-            await input_el.fill("hello test 12345")
-            for _ in range(5):
-                await input_el.press("Enter")
-            await page.wait_for_timeout(500)
-            messages = await page.locator('.msg-row.user').count()
-            assert messages <= 1, f"Expected 1 user message, got {messages} (double-submit!)"
-            await browser.close()
+            try:
+                page = await browser.new_page()
+                await self._login_and_select_model(page)
+                input_el = page.locator('#input')
+                await input_el.fill("hello test 12345")
+                for _ in range(5):
+                    await input_el.press("Enter")
+                await page.wait_for_timeout(500)
+                messages = await page.locator('.msg-row.user').count()
+                assert messages <= 1, f"Expected 1 user message, got {messages} (double-submit!)"
+            finally:
+                await browser.close()
 
 
 # ---------------------------------------------------------------------------
@@ -218,31 +239,34 @@ class TestCliChatFlow:
         await page.wait_for_timeout(1000)
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(55)
     async def test_cloud_model_responds(self):
         """Sending a message with a cloud model should return a response."""
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await self._login_and_select_model(page, 0)
-
-            input_el = page.locator('#input')
-            await input_el.fill("What is 2+2? Reply with just the number.")
-            await input_el.press("Enter")
-
             try:
-                await page.wait_for_selector(
-                    '.msg-row.assistant',
-                    timeout=60000,
-                )
-            except Exception:
-                body = await page.content()
-                assert "streaming" in body.lower() or "spinner" in body.lower() or "waiting" in body.lower(), \
-                    "No response and no streaming indicator visible"
-                return
+                page = await browser.new_page()
+                await self._login_and_select_model(page, 0)
 
-            assistant_msgs = await page.locator('.msg-row.assistant').count()
-            assert assistant_msgs >= 1, "No assistant response received"
-            await browser.close()
+                input_el = page.locator('#input')
+                await input_el.fill("What is 2+2? Reply with just the number.")
+                await input_el.press("Enter")
+
+                try:
+                    await page.wait_for_selector(
+                        '.msg-row.assistant',
+                        timeout=45000,
+                    )
+                except Exception:
+                    body = await page.content()
+                    assert "streaming" in body.lower() or "spinner" in body.lower() or "waiting" in body.lower(), \
+                        "No response and no streaming indicator visible"
+                    return
+
+                assistant_msgs = await page.locator('.msg-row.assistant').count()
+                assert assistant_msgs >= 1, "No assistant response received"
+            finally:
+                await browser.close()
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +278,10 @@ class TestMCPChatEndToEnd:
     """Direct MCP chat tool tests — verify the backend is solid."""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(55)
     async def test_chat_qwen(self):
         """Chat with qwen should route to LM Studio."""
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=50) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
@@ -271,9 +296,10 @@ class TestMCPChatEndToEnd:
             assert "qwen" in text.lower(), f"Should route to qwen, got: {text[:200]}"
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_chat_empty_message_rejected(self):
         """Empty message should return validation error, not crash."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
@@ -284,9 +310,10 @@ class TestMCPChatEndToEnd:
             assert "required" in text.lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(55)
     async def test_image_pipeline_draft_mode(self):
         """image_pipeline draft mode should return quickly (Arc only)."""
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=50) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
@@ -310,9 +337,10 @@ class TestChatErrorHandling:
     """Verify graceful error handling for edge cases."""
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(30)
     async def test_invalid_agent_rejected(self):
         """Requesting an unknown agent should return an error."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
@@ -326,9 +354,10 @@ class TestChatErrorHandling:
             assert "error" in text.lower() or "unknown" in text.lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.timeout(55)
     async def test_shell_metacharacters_safe(self):
         """Messages with shell metacharacters should not break SSH commands."""
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=50) as client:
             resp = await client.post(f"{_MCP_URL}/mcp", json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "tools/call",
