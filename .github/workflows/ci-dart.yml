@@ -38,7 +38,7 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          wget -qO /tmp/dart.zip "https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip"
+          curl -fsSL -o /tmp/dart.zip "https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip"
           unzip -qo /tmp/dart.zip -d "$HOME"
           rm -f /tmp/dart.zip
           echo "$HOME/dart-sdk/bin" >> "$GITHUB_PATH"
@@ -58,7 +58,7 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: |
-          wget -qO /tmp/dart.zip "https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip"
+          curl -fsSL -o /tmp/dart.zip "https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip"
           unzip -qo /tmp/dart.zip -d "$HOME"
           rm -f /tmp/dart.zip
           echo "$HOME/dart-sdk/bin" >> "$GITHUB_PATH"
