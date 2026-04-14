@@ -106,6 +106,13 @@ jobs:
         shell: bash
         timeout-minutes: 15
         run: trivy fs --severity HIGH,CRITICAL --exit-code 1 .
+      - name: Install Grype
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          if ! command -v grype &>/dev/null; then
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+          fi
       - name: Grype vulnerability scan
         shell: bash
         timeout-minutes: 15
