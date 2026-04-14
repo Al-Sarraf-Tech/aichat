@@ -57,7 +57,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Cache ~/.cache/pip
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
           path: ~/.cache/pip
@@ -93,6 +93,13 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         run: find . -name '*.sh' -type f | xargs shellcheck --severity=warning
+      - name: Install Trivy
+        shell: bash
+        timeout-minutes: 5
+        run: |
+          if ! command -v trivy &>/dev/null; then
+            curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          fi
       - name: Trivy filesystem scan
         shell: bash
         timeout-minutes: 15
