@@ -1,21 +1,27 @@
 # AIChat
 
-[![CI](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci.yml/badge.svg)](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci.yml)
-[![Dart CI](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/dart-ci.yml/badge.svg)](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/dart-ci.yml)
+[![CI](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci-aichat.yml/badge.svg)](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci-aichat.yml)
+[![Dart CI](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci-dart.yml/badge.svg)](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/ci-dart.yml)
+[![Orchestrator Scan](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/orchestrator-scan.yml/badge.svg)](https://github.com/Al-Sarraf-Tech/aichat/actions/workflows/orchestrator-scan.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
 ![Dart](https://img.shields.io/badge/dart-stable-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-informational)
+![Version](https://img.shields.io/badge/version-0.2.0-green)
 
-> CI runs on self-hosted runners managed by the [Haskell Orchestrator](https://github.com/Al-Sarraf-Tech/Haskell-Orchestrator).
+> CI runs on self-hosted runners governed by the [Haskell Orchestrator](https://github.com/Al-Sarraf-Tech/Haskell-Orchestrator).
 
-A **local-first AI chat platform** with two interfaces:
+A local-first AI platform built for production use on bare-metal Linux. 16-container Docker Compose stack, 2,200+ Python source files, 85 MCP tools, three user interfaces, and no dependency on cloud AI services.
 
-- **Web UI** — A polished, ChatGPT-like web interface (Dart/Shelf backend + vanilla JS frontend) with JWT auth, streaming, tool cards, image grids with lightbox, and per-model capability badges
-- **Terminal UI** — A Textual-based TUI for terminal-native workflows with 14 keybinds and full MCP tool access
+**Interfaces:**
+- **Web UI** — Dart/Shelf backend with vanilla JS frontend. JWT auth, SSE streaming, tool cards, image grids, per-model capability badges, 31 personalities.
+- **Terminal UI (TUI)** — Python/Textual application. 14 keybinds, full MCP tool access, session management, one-shot CLI mode.
+- **Telegram bot** — Python bot with streaming replies, tool dispatch, and per-chat session isolation.
 
-Both interfaces connect to [LM Studio](https://lmstudio.ai) for local LLM inference (no cloud dependency) and share a unified MCP tool server with 16 mega-tools backed by real services: web search, image search, browser automation, code execution, persistent memory, knowledge graphs, vector search, PDF processing, and more.
-
-Image generation runs on [ComfyUI](https://github.com/comfyanonymous/ComfyUI) via an RTX 3090 with FLUX Schnell and SDXL models. GPU resources are automatically managed — models unload after 10 minutes of idle time and reload on demand.
+**AI backends:**
+- [LM Studio](https://lmstudio.ai) on RTX 3090 for main inference (OpenAI-compatible API)
+- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on RTX 3090 for image generation (FLUX Schnell, FLUX Dev, SDXL Lightning, SDXL Turbo)
+- Intel Arc A380 running `qwen2.5-3b-instruct` for tool routing and prompt preprocessing
+- Intel Arc A380 OpenVINO for embeddings and CLIP operations
 
 ---
 
@@ -25,20 +31,21 @@ Image generation runs on [ComfyUI](https://github.com/comfyanonymous/ComfyUI) vi
 - [Hardware Layout](#hardware-layout)
 - [Services](#services)
 - [Models](#models)
+- [MCP Tool System](#mcp-tool-system)
 - [Tool Tier System](#tool-tier-system)
-- [Requirements](#requirements)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-- [Web UI](#web-ui)
-- [TUI Usage](#tui-usage)
+- [Interfaces](#interfaces)
+  - [Web UI](#web-ui)
+  - [Terminal UI (TUI)](#terminal-ui-tui)
+  - [Telegram Bot](#telegram-bot)
 - [Image Generation](#image-generation)
 - [GPU Resource Management](#gpu-resource-management)
 - [Arc A380 Preprocessing](#arc-a380-preprocessing)
-- [Image Search Pipeline](#image-search-pipeline)
-- [Personalities](#personalities)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
 - [CI/CD Pipeline](#cicd-pipeline)
 - [Development](#development)
-- [Replicating This Setup](#replicating-this-setup)
+- [Test Coverage](#test-coverage)
 - [Known Limitations](#known-limitations)
 
 ---
@@ -46,144 +53,114 @@ Image generation runs on [ComfyUI](https://github.com/comfyanonymous/ComfyUI) vi
 ## Architecture
 
 ```
-                    ┌──────────────────────────────────────────────────────┐
-                    │  User                                                │
-                    │  Browser (:8200) ──── or ──── Terminal (aichat TUI)  │
-                    └────────┬───────────────────────────────┬─────────────┘
-                             │                               │
-                             ▼                               ▼
-                    ┌────────────────┐              ┌────────────────┐
-                    │  aichat-auth   │              │  aichat TUI    │
-                    │  Flask JWT     │              │  Python Textual│
-                    │  :8200 (proxy) │              │  MCP stdio     │
-                    │  :8247 (admin) │              └───────┬────────┘
-                    └───────┬────────┘                      │
-                            │                               │
-                            ▼                               │
-                    ┌────────────────┐                      │
-                    │  aichat-web    │                      │
-                    │  Dart/Shelf    │                      │
-                    │  SSE streaming │                      │
-                    │  :8200 (int)   │                      │
-                    └───┬────────┬───┘                      │
-                        │        │                          │
-            ┌───────────┘        └──────────┐               │
-            ▼                               ▼               ▼
-   ┌─────────────────┐            ┌──────────────────────────────┐
-   │  Intel Arc A380 │            │  aichat-mcp  :8096           │
-   │  :1235 (router) │            │  MCP gateway — 16 mega-tools │
-   │  Qwen2.5-3B     │            │  FastAPI + httpx              │
-   │  Tool routing    │            └──────┬───────────────────────┘
-   │  Prompt compress │                   │
-   └─────────────────┘        ┌───────────┼───────────┬──────────┐
-                              ▼           ▼           ▼          ▼
-                    ┌──────────┐  ┌────────┐  ┌────────┐  ┌──────────┐
-                    │aichat-   │  │aichat- │  │aichat- │  │aichat-   │
-                    │data:8091 │  │vision  │  │browser │  │sandbox   │
-                    │memory    │  │:8099   │  │:8104   │  │:8095     │
-                    │graph     │  │OCR,face│  │Chromium│  │Python/JS │
-                    │planner   │  │video   │  │scrape  │  │bash exec │
-                    └────┬─────┘  └────────┘  └────────┘  └──────────┘
-                         │
-        ┌────────────────┼────────────────┐
-        ▼                ▼                ▼
-   ┌─────────┐    ┌───────────┐    ┌───────────┐
-   │Postgres │    │Qdrant     │    │Redis      │
-   │:5432    │    │:6333      │    │(Valkey)   │
-   │auth+data│    │vectors    │    │ctx cache  │
-   └─────────┘    └───────────┘    └───────────┘
+                    ┌──────────────────────────────────────────────────────────────┐
+                    │  Clients                                                      │
+                    │  Browser (:8200) ── Terminal (aichat TUI) ── Telegram bot    │
+                    └─────────┬──────────────────────┬─────────────────────────────┘
+                              │                      │
+                              ▼                      │
+                    ┌──────────────────┐             │
+                    │   aichat-auth    │             │
+                    │   Flask JWT proxy│             │
+                    │   :8200 (public) │             │
+                    │   :8247 (admin)  │             │
+                    └────────┬─────────┘             │
+                             │                       │
+                             ▼                       ▼
+                    ┌──────────────────┐    ┌─────────────────────┐
+                    │   aichat-web     │    │   TUI / Telegram     │
+                    │   Dart/Shelf     │    │   MCP stdio / HTTP   │
+                    │   SSE streaming  │    └──────────┬──────────┘
+                    │   :8200 (int)    │               │
+                    └──────┬───────────┘               │
+                           │                           │
+                           └──────────┬────────────────┘
+                                      │
+                                      ▼
+                          ┌───────────────────────────┐
+                          │   aichat-mcp  :8096        │
+                          │   FastAPI MCP gateway      │
+                          │   85 tools, 16 mega-tools  │
+                          │   HTTP + SSE (JSON-RPC)    │
+                          └────┬──────┬──────┬────┬───┘
+                               │      │      │    │
+                  ┌────────────┘  ┌───┘  ┌──┘  ┌─┘
+                  ▼               ▼      ▼     ▼
+           ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
+           │aichat-   │  │aichat-   │  │aichat-   │  │aichat-   │  │aichat-   │
+           │data:8091 │  │vision    │  │docs:8101 │  │sandbox   │  │browser   │
+           │          │  │:8099     │  │          │  │:8095     │  │:8104     │
+           │memory    │  │OCR       │  │PDF ingest│  │Python/JS │  │Playwright│
+           │graph     │  │CLIP emb  │  │full-text │  │bash exec │  │Chromium  │
+           │planner   │  │YOLOv8n   │  │openpyxl  │  │          │  │          │
+           │jobs      │  │FFmpeg    │  │pdfminer  │  │          │  │          │
+           │embeddings│  │OpenVINO  │  │          │  │          │  │          │
+           └────┬─────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
+                │
+    ┌───────────┼──────────────┐
+    ▼           ▼              ▼
+┌─────────┐ ┌──────────┐ ┌─────────┐
+│Postgres │ │Qdrant    │ │Valkey   │
+│:5432    │ │:6333     │ │(Redis)  │
+│auth,data│ │vectors   │ │ctx cache│
+└─────────┘ └──────────┘ └─────────┘
 
-                  ┌──────────────────────────────┐
-                  │  LM Studio  (RTX 3090)       │
-                  │  192.168.50.2:1234            │
-                  │  Main inference — all models  │
-                  │  JIST auto-load/swap          │
-                  └──────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│   Intel Arc A380  (amarillo, :1235)           │
+│   qwen2.5-3b-instruct (always loaded)        │
+│   Tool routing · prompt compression ·        │
+│   context compaction (Redis-cached)          │
+└──────────────────────────────────────────────┘
 
-                  ┌──────────────────────────────┐
-                  │  ComfyUI  (RTX 3090)         │
-                  │  100.91.44.100:8188           │
-                  │  FLUX Schnell, SDXL Turbo     │
-                  │  SDXL Lightning, FLUX Dev     │
-                  └──────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│   LM Studio  (dominus, 192.168.50.2:1234)    │
+│   Main inference — 6 active chat models      │
+│   RTX 3090 · 24 GB VRAM · JIST auto-swap    │
+└──────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────┐
+│   ComfyUI  (dominus WSL2, 100.91.44.100:8188)│
+│   FLUX Schnell · FLUX Dev · SDXL Lightning   │
+│   SDXL Turbo · GPU TTL auto-unload           │
+└──────────────────────────────────────────────┘
 ```
-
----
-
-## Hardware Layout
-
-This platform is designed for a **two-GPU split architecture** across a local network:
-
-```
-┌────────────────────────────────────────────┐     ┌────────────────────────────────────┐
-│  SERVER  (Fedora 43, Intel Arc A380)       │     │  WORKSTATION  (Windows, RTX 3090)  │
-│  hostname: amarillo                        │     │  hostname: dominus                 │
-│  LAN: 192.168.50.5                         │     │  LAN: 192.168.50.2                 │
-│                                            │     │                                    │
-│  ┌──────────────────────────────────────┐  │     │  ┌──────────────────────────────┐  │
-│  │  Docker Compose Stack               │  │     │  │  LM Studio                   │  │
-│  │                                     │  │     │  │  :1234                        │  │
-│  │  aichat-auth   :8200 (user-facing)  │  │     │  │                              │  │
-│  │  aichat-web    :8200 (internal)     │──────────►│  7 chat models               │  │
-│  │  aichat-mcp    :8096 (tools)        │  │     │  │  JIST auto-load/swap         │  │
-│  │  aichat-redis  :6379 (cache)        │  │     │  │  24GB VRAM                   │  │
-│  │  aichat-db     :5432 (postgres)     │  │     │  └──────────────────────────────┘  │
-│  │  aichat-vector :6333 (qdrant)       │  │     │                                    │
-│  │  aichat-data   :8091                │  │     └────────────────────────────────────┘
-│  │  aichat-vision :8099                │  │
-│  │  aichat-browser:8104                │  │
-│  │  aichat-searxng:8080                │  │
-│  │  aichat-sandbox:8095                │  │
-│  │  aichat-docs   :8101                │  │
-│  │  aichat-minio  :9001/9002           │  │
-│  │  + 3 more services                  │  │
-│  └──────────────────────────────────────┘  │
-│                                            │
-│  ┌──────────────────────────────────────┐  │
-│  │  Intel Arc A380 (6GB VRAM)          │  │
-│  │  LM Studio :1235 (via socat proxy)  │  │
-│  │  Qwen2.5-3B-Instruct (always loaded)│  │
-│  │                                     │  │
-│  │  Roles:                             │  │
-│  │  1. Tool routing    (~500ms-1.1s)   │  │
-│  │  2. Prompt compress (~3-5s)         │  │
-│  │  3. Context compact (cached Redis)  │  │
-│  └──────────────────────────────────────┘  │
-│                                            │
-│  NVMe Persistence: /mnt/nvmeINT/aichat/   │
-│  ├── postgres/  redis/  qdrant/            │
-│  ├── web-db/  minio/  whatsapp/            │
-│  └── ~930GB free                           │
-└────────────────────────────────────────────┘
-```
-
-The workstation also runs **ComfyUI** (WSL2, `:8188`) for image generation with FLUX Schnell, SDXL Turbo, and SDXL Lightning models. Models auto-unload after 10 minutes of idle time via the GPU TTL watcher.
 
 ### Request Flow
 
 ```
-User browser → :8200 (aichat-auth, JWT check)
+Browser → :8200 (aichat-auth JWT check)
   → aichat-web (Dart/Shelf)
-    → Arc A380 :1235 (tool routing + prompt compression)
+    → Arc A380 :1235 (tool routing + prompt compression, ~3-5s)
     → aichat-mcp :8096 (tool execution)
       → aichat-searxng (web/image search)
-      → aichat-browser (page scraping)
-      → aichat-vision (OCR, face detect, CLIP embeddings)
+      → aichat-browser (page scraping/screenshots)
+      → aichat-vision (OCR, CLIP, face detection, video)
       → aichat-sandbox (code execution)
       → ComfyUI :8188 (image generation — FLUX/SDXL)
     → RTX 3090 :1234 (main LLM generation, SSE streaming)
   ← SSE tokens stream back to browser
 ```
 
-### Network Rules
+---
 
-- All ports/IPs are fixed and must not change
-- Docker services communicate on internal Docker network
-- Only `:8200` (web), `:8247` (admin), and `:8096` (MCP) are host-exposed
-- LM Studio endpoints are on the LAN (`192.168.50.x`)
-- Redis is internal-only (no host binding)
+## Hardware Layout
 
-You can run everything on a single machine — just point `LM_STUDIO_URL` and `TOOL_ROUTER_URL` to `localhost`.
+```
+┌──────────────────────────────────────────┐     ┌─────────────────────────────────────┐
+│  amarillo  (Fedora 43, Intel Arc A380)   │     │  dominus  (Windows, RTX 3090)        │
+│  192.168.50.5                            │     │  192.168.50.2                        │
+│                                          │     │                                      │
+│  Docker Compose stack (16 containers)   │     │  LM Studio :1234                     │
+│  NVMe: /mnt/nvmeINT/aichat/             │─────►│  6 chat models, JIST auto-swap      │
+│  ~930 GB free                            │     │  24 GB VRAM                          │
+│                                          │     │                                      │
+│  Intel Arc A380 (6 GB VRAM)             │     │  ComfyUI :8188 (WSL2)               │
+│  LM Studio :1235 (qwen2.5-3b)           │     │  FLUX Schnell, FLUX Dev              │
+│  OpenVINO embeddings (:8105)            │     │  SDXL Lightning, SDXL Turbo          │
+└──────────────────────────────────────────┘     └─────────────────────────────────────┘
+```
+
+Single-machine operation is supported — point `LM_STUDIO_URL` and `TOOL_ROUTER_URL` to `localhost` and leave `COMFYUI_URL` unset to skip image generation.
 
 ---
 
@@ -191,98 +168,343 @@ You can run everything on a single machine — just point `LM_STUDIO_URL` and `T
 
 | Service | Port | Persistence | Purpose |
 |---------|------|-------------|---------|
-| `aichat-db` | 5432 | `/mnt/nvmeINT/aichat/postgres/` | PostgreSQL — auth users, articles, metadata |
-| `aichat-vector` | 6333 | `/mnt/nvmeINT/aichat/qdrant/` | Qdrant — semantic search, CLIP embeddings |
-| `aichat-redis` | 6379 | `/mnt/nvmeINT/aichat/redis/` | Valkey — context compaction cache, tool routing cache |
-| `aichat-data` | 8091 | — | Consolidated data API: memory, articles, graph, planner, jobs, research |
-| `aichat-vision` | 8099 | — | OCR (Tesseract), CLIP embeddings (OpenVINO), object detection (YOLOv8n), video analysis, OpenVINO SDXL Turbo endpoint |
-| `aichat-docs` | 8101 | — | Document ingestion, PDF extraction, full-text search |
-| `aichat-sandbox` | 8095 | — | Isolated code execution: Python, bash, JavaScript |
-| `aichat-searxng` | 8080 | — | Self-hosted meta-search (DuckDuckGo, Bing, Google) |
-| `aichat-mcp` | **8096** | — | MCP HTTP/SSE gateway — 16 mega-tools |
-| `aichat-browser` | 8104 | — | Headless Chromium for page screenshots and scraping |
-| `aichat-jupyter` | 8098 | — | Stateful Jupyter kernel for code execution |
-| `aichat-whatsapp` | 8097 | — | WhatsApp bot integration |
-| `aichat-minio` | 9001/9002 | `/mnt/nvmeINT/aichat/minio/` | S3-compatible object storage |
-| `aichat-inference` | 8105 | — | Intel Arc OpenVINO embeddings (offload from RTX 3090) |
-| `aichat-web` | 8200 (int) | `/mnt/nvmeINT/aichat/web-db/` | Dart/Shelf web server + vanilla JS frontend |
-| `aichat-auth` | **8200**, 8247 | — | Flask JWT auth proxy + admin panel |
+| `aichat-db` | 5432 (host: 5435) | `/mnt/nvmeINT/aichat/postgres/` | PostgreSQL 16 — auth, articles, metadata |
+| `aichat-vector` | 6333 | `/mnt/nvmeINT/aichat/qdrant/` | Qdrant — vector search, CLIP embeddings |
+| `aichat-redis` | 6379 (internal) | `/mnt/nvmeINT/aichat/redis/` | Valkey — context compaction cache, tool routing cache |
+| `aichat-minio` | 9001/9002 | `/mnt/nvmeINT/aichat/minio/` | MinIO S3-compatible object storage |
+| `aichat-data` | 8091 | — | Consolidated data API: memory, knowledge graph, planner, jobs, research, embeddings, batch ops |
+| `aichat-vision` | 8099 | — | OCR (Tesseract), CLIP (OpenVINO), object detection (YOLOv8n), video (FFmpeg), OpenVINO SDXL |
+| `aichat-docs` | 8101 | — | PDF extraction (pdfminer), document ingestion, full-text search, Excel (openpyxl) |
+| `aichat-sandbox` | 8095 | — | Isolated code execution: Python, JavaScript, bash (non-root container) |
+| `aichat-browser` | 8104 | — | Headless Chromium via Playwright — scraping, screenshots, page images |
+| `aichat-searxng` | 8080 (internal) | — | Self-hosted SearXNG meta-search (Google, Bing, DuckDuckGo) |
+| `aichat-jupyter` | 8098 (internal) | — | Stateful Jupyter kernel for code execution |
+| `aichat-inference` | 8105 | — | Intel Arc OpenVINO embeddings (offloads from RTX 3090) |
+| `aichat-whatsapp` | 8097 | `/mnt/nvmeINT/aichat/whatsapp/` | WhatsApp bot integration |
+| `aichat-mcp` | **8096** | — | MCP HTTP/SSE gateway — 85 tools, 16 mega-tool categories |
+| `aichat-web` | 8200 (internal) | `/mnt/nvmeINT/aichat/web-db/` | Dart/Shelf web server + vanilla JS frontend |
+| `aichat-auth` | **8200** (public), 8247 (admin) | — | Flask JWT auth proxy + user management admin panel |
 
-All data volumes persist to NVMe at `/mnt/nvmeINT/aichat/`. Change this path in `docker-compose.yml` for your system.
+Only `:8200` and `:8247` are publicly exposed. All inter-service communication is on the internal Docker network. Host ports are defined exclusively in `docker-compose.ports.yml` (not the base compose file).
+
+All data volumes persist to NVMe at `/mnt/nvmeINT/aichat/`. Adjust this path in `docker-compose.yml` for other systems.
 
 ---
 
 ## Models
 
-Tested models (from LM Studio on RTX 3090):
+| Model | Type | Quant | Context | Tools | Reasoning |
+|-------|------|-------|---------|-------|-----------|
+| `openai/gpt-oss-20b` | LLM | MXFP4 | 131K | 9 | No |
+| `dolphin-mistral-glm-4.7-flash-24b` | LLM | Q4_K_S | 32K | 9 | Yes |
+| `qwen/qwen3.5-9b` | VLM | Q4_K_M | 262K | 7 | Yes |
+| `zai-org/glm-4.6v-flash` | VLM | Q8_0 | 131K | 7 | Yes |
+| `ibm/granite-4-h-tiny` | LLM | Q8_0 | 1M | 5 | No |
+| `microsoft/phi-4-mini-reasoning` | LLM | Q8_0 | 131K | 2 | Yes |
 
-| Model | Type | Quant | Context | Tools | Reasoning | Notes |
-|-------|------|-------|---------|-------|-----------|-------|
-| `openai/gpt-oss-20b` | LLM | MXFP4 | 131K | 9 | No | Strong general model |
-| `dolphin-mistral-glm-4.7-flash-24b-*` | LLM | Q4_K_S | 32K | 9 | Yes | **UNRESTRICTED**, thinking, enforceTools |
-| `qwen/qwen3.5-9b` | VLM | Q4_K_M | 262K | 7 | Yes | Vision + reasoning |
-| `zai-org/glm-4.6v-flash` | VLM | Q8_0 | 131K | 7 | Yes | Vision + reasoning |
-| `ibm/granite-4-h-tiny` | LLM | Q8_0 | 1M | 5 | No | Tiny, condensed prompts |
-| `microsoft/phi-4-mini-reasoning` | LLM | Q8_0 | 131K | 2 | Yes | Very weak tools |
+The `qwen2.5-3b-instruct` model runs permanently on the Intel Arc A380 as the tool router and prompt preprocessor (not a chat model).
 
-The `qwen2.5-3b-instruct` model runs permanently on the Intel Arc A380 as the tool router / prompt preprocessor.
+---
+
+## MCP Tool System
+
+The MCP server (`aichat-mcp`, port 8096) exposes **85 callable tools** organized into **16 mega-tool categories**. It speaks MCP JSON-RPC over HTTP and SSE, making it compatible with LM Studio, Claude Desktop, and any MCP-aware client. The LM Studio connection config is in `lmstudio-mcp.json`.
+
+### Tool Categories
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| `web` | `web_search`, `web_fetch`, `page_extract`, `page_scrape`, `page_images`, `extract_article`, `structured_extract`, `smart_summarize` | SearXNG/DDG/Bing search, page fetching, content extraction |
+| `browser` | `browser`, `screenshot`, `scroll_screenshot`, `bulk_screenshot`, `screenshot_search`, `browser_download_page_images`, `browser_save_images` | Headless Chromium automation, visual captures |
+| `image` | `image_search`, `image_generate`, `image_pipeline`, `image_edit`, `image_enhance`, `image_remix`, `image_caption`, `image_annotate`, `image_crop`, `image_diff`, `image_stitch`, `image_upscale`, `image_zoom`, `image_scan`, `fetch_image`, `ocr_image` | Full image lifecycle: search, gen (ComfyUI/FLUX/SDXL), editing, analysis |
+| `document` | `docs_ingest`, `docs_extract_tables`, `pdf_read`, `pdf_edit`, `pdf_merge`, `pdf_split`, `pdf_fill_form`, `ocr_pdf` | PDF operations, document ingestion, OCR, table extraction |
+| `code` | `code_run` | Python, JavaScript, bash execution in the sandbox container |
+| `media` | `video_info`, `video_frames`, `video_thumbnail`, `tts` | Video analysis, frame extraction, text-to-speech |
+| `memory` | `memory_store`, `memory_recall` | Persistent key-value memory with TTL |
+| `knowledge` | `graph_add_node`, `graph_add_edge`, `graph_query`, `graph_search`, `graph_path` | NetworkX/SQLite knowledge graph |
+| `vector` | `vector_store`, `vector_search`, `vector_delete`, `vector_collections`, `embed_store`, `embed_search` | Qdrant vector store, semantic search |
+| `data` | `db_store_article`, `db_search`, `db_store_image`, `db_list_images`, `db_cache_get`, `db_cache_store`, `get_errors` | PostgreSQL-backed article/image store and cache |
+| `planner` | `plan_create_task`, `plan_get_task`, `plan_list_tasks`, `plan_complete_task`, `plan_fail_task`, `plan_delete_task` | Dependency-aware task queue |
+| `jobs` | `job_submit`, `job_status`, `job_result`, `job_cancel`, `job_list`, `batch_submit` | Durable async job system with batch dispatch |
+| `research` | `researchbox_push`, `researchbox_search` | RSS-backed deep research pipeline |
+| `custom_tools` | `create_tool`, `list_custom_tools`, `call_custom_tool`, `delete_custom_tool` | User-defined runtime tools |
+| `vision` | `face_recognize` | Face detection and recognition |
+| `orchestration` | `orchestrate`, `chat` | Multi-tool orchestration, SSE chat stream |
+
+**Internal-only** (never sent to chat models): `knowledge`, `vector`, `jobs`, `custom_tools`, `planner`, `think`, `system`.
+
+### Module Structure (`docker/mcp/`)
+
+```
+app.py                  6,561 lines — FastAPI MCP app, all tool registrations
+orchestrator.py         — intent classification, bounded concurrency, resource governance
+source_strategy.py      — configurable news source preferences
+agents.py               — SSH CLI agent dispatch (Claude, Codex, Gemini), LM Studio routing
+gpu_ttl.py              — GPU idle TTL watcher (ComfyUI + LM Studio + vision)
+handlers/               — per-category HTTP route handlers
+tools/
+    web.py              603 lines — SearXNG/DDG/Bing + content extraction
+    browser.py          1,294 lines — Playwright automation
+    document.py         375 lines — PDF/OCR/ingest
+    media.py            — video + TTS
+    code.py             252 lines — sandbox execution
+    memory.py           — key-value store
+    knowledge.py        132 lines — NetworkX graph
+    data.py             107 lines — PostgreSQL article/cache
+    planner.py          238 lines — task queue
+    research.py         260 lines — RSS research
+    ssh.py              337 lines — remote command execution
+    system.py           308 lines — system monitoring
+    git.py              543 lines — Git operations
+    monitor.py          613 lines — system metrics
+    notify.py           276 lines — notifications
+    telegram/           — Telegram bot tools
+    iot.py              396 lines — IoT device integration
+```
 
 ---
 
 ## Tool Tier System
 
-Instead of sending all 16 tools to every model (which causes timeouts and confusion), tools are organized into tiers:
+Tools are allocated per model based on observed reliability. Sending all 85 tools to every model causes timeouts and hallucinated tool calls.
 
-### Default Tier (7 tools) — available to most models
+### Default Tier (7 tools)
 
-| Tool | Actions | Description |
-|------|---------|-------------|
-| `web` | search, fetch, extract, news, wikipedia, arxiv, youtube | Web search and page fetching via SearXNG/DDG/Bing |
-| `image` | search, generate, edit, fetch, caption, face_detect | Image search (SearXNG/DDG/Bing Images), generation, analysis |
-| `browser` | navigate, screenshot, scrape, page_images | Headless Chromium browser automation |
-| `research` | deep, rss_search | Multi-hop deep research with RSS feeds |
-| `code` | python, javascript, bash | Sandboxed code execution |
-| `document` | ingest, extract, ocr, pdf | Document processing and OCR |
-| `memory` | store, recall, list, delete | Persistent key-value memory |
+| Tool | Key Actions | Description |
+|------|-------------|-------------|
+| `web` | search, fetch, extract, news, wikipedia, arxiv | Web search via SearXNG/DDG/Bing, page fetching |
+| `image` | search, generate, edit, caption, face_detect | Image search (real CDN URLs), ComfyUI generation |
+| `browser` | navigate, screenshot, scrape | Headless Chromium |
+| `research` | deep, rss_search | Multi-hop research with RSS |
+| `code` | python, javascript, bash | Sandboxed execution |
+| `document` | ingest, extract, ocr, pdf | Document processing |
+| `memory` | store, recall, list, delete | Persistent KV memory |
 
 ### Extended Tier (+2 for strong models)
 
 | Tool | Description |
 |------|-------------|
 | `media` | Video analysis, TTS, object detection |
-| `data` | Database operations, article storage, cache |
+| `data` | PostgreSQL article storage, cache |
 
-### Never-Routed (internal/infrastructure)
-
-`knowledge`, `vector`, `jobs`, `custom_tools`, `planner`, `think`, `system` — used internally by the MCP server, never sent to chat models.
-
-### Per-Model Tool Allocation
+### Per-Model Allocation
 
 | Model | Tools | Count |
 |-------|-------|-------|
 | gpt-oss-20b, dolphin | Default + Extended | 9 |
-| qwen3.5-9b | Default only | 7 |
+| qwen3.5-9b | Default | 7 |
 | glm-4.6v-flash | web, image, browser, research, document, data, media | 7 |
 | granite-tiny | web, image, browser, code, memory | 5 |
 | phi-4-mini | web, browser | 2 |
 
 ### Image-Only Routing
 
-When a user asks for images/pictures/photos, the tool router sends **only the `image` tool**. This prevents the model from using `web` search (which returns page links, not actual images) and hallucinating fake image URLs. The `image` tool does its own SearXNG/DDG/Bing image search and returns real CDN URLs + inline base64 images.
+Image requests (detected by keyword) route exclusively to the `image` tool — not `web`. The `image` tool queries SearXNG/DDG/Bing Images and returns real CDN URLs with inline base64 thumbnails. This eliminates hallucinated image URLs.
 
 ---
 
-## Requirements
+## Interfaces
+
+### Web UI
+
+Vanilla JS single-page application (~1,200 lines) served by the Dart/Shelf backend.
+
+**Features:**
+- Streaming responses with blinking cursor, token/s counter, elapsed time
+- Tool cards with live elapsed timers per tool call
+- Image grid (responsive CSS Grid) with lightbox (keyboard: Escape, arrow keys)
+- Image dedup via URL normalization (strips CDN size suffixes, query params)
+- Model selector with state dots (loaded/unloaded), quant, context length, type (LLM/VLM), tool count
+- Reasoning/thinking content in collapsible cards (hidden by default)
+- 31 personalities with category-filtered grid
+- File uploads: images for vision models, text/code files inline
+- Per-user chat isolation via JWT
+- Admin panel at `:8247` — user management, IP ban control
+
+**Dart backend (`lib/`):**
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `router.dart` | ~960 | Route table, CORS, auth guard, static files |
+| `image_handler.dart` | ~1,200 | ComfyUI workflows, HF fallback, async image job system |
+| `model_handler.dart` | ~250 | Model listing, warmup, capability caching |
+| `personalities.dart` | ~800 | 31 personalities with system prompts |
+| `model_profiles.dart` | ~200 | Per-model tool tiers and parameters |
+| `sanitizer.dart` | ~130 | Tool result cleaning, image URL extraction |
+| `tool_router.dart` | — | Rule-based + Arc GPU tool routing |
+| `llm_client.dart` | — | LM Studio HTTP client |
+| `mcp_client.dart` | — | MCP JSON-RPC client |
+| `database.dart` | — | SQLite conversation storage |
+
+**SSE event types:**
+
+| Event | Description |
+|-------|-------------|
+| `status` | Model loading indicator |
+| `thinking` | Reasoning content (collapsible) |
+| `token` | Content tokens (buffered, rendered on `done`) |
+| `tool_start` | Tool execution started |
+| `tool_result` | Tool execution complete (images collected) |
+| `error` | Error message |
+| `done` | Stream complete — triggers single markdown render pass |
+
+Tokens accumulate in a text buffer during streaming. The DOM updates once on `done` via a single render pass (marked.js + DOMPurify + highlight.js). This eliminates DOM thrashing during long generations.
+
+### Terminal UI (TUI)
+
+Python/Textual application. 2,200+ Python source files across the project; TUI core is ~13,300 lines.
+
+```bash
+aichat [OPTIONS] [MESSAGE]   # interactive TUI or one-shot chat
+aichat mcp                   # run MCP server over stdio
+aichat repo create           # create and push GitHub repo
+```
+
+**Keyboard shortcuts:**
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| F1 | Help | F7 | Sessions |
+| F2 | Model picker | F8 | Settings |
+| F3 | Search | F9 | New chat |
+| F4 | Approval cycle | F10 | Clear |
+| F5 | Theme picker | F11 | Cancel |
+| F6 | Toggle streaming | F12 | Quit |
+| Ctrl+S | Shell toggle | Ctrl+G | Personality |
+
+**TUI source (`src/aichat/`):**
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `app.py` | 2,733 | Main Textual application |
+| `mcp_server.py` | 2,546 | MCP stdio server implementation |
+| `tools/manager.py` | 2,458 | Tool dispatch and lifecycle |
+| `tools/browser.py` | 1,952 | Browser tool integration |
+| `client.py` | 276 | LM Studio HTTP client |
+| `personalities.py` | 457 | Personality definitions |
+| `ui/modals.py` | 243 | UI modal dialogs |
+
+Install:
+```bash
+pip install -e ".[dev]"
+```
+
+### Telegram Bot
+
+Located in `docker/mcp/tools/telegram/`. Components:
+
+| File | Purpose |
+|------|---------|
+| `api.py` | Telegram Bot API client |
+| `dispatcher.py` | Message routing and command handling |
+| `stream.py` | Streaming response delivery |
+| `auth.py` | Per-chat authorization |
+| `db.py` | Session and history persistence |
+| `poller.py` | Long-polling loop |
+| `summary.py` | Conversation summarization |
+| `handlers/` | Command and message handlers |
+
+---
+
+## Image Generation
+
+Image generation runs on ComfyUI (WSL2, RTX 3090) via dynamic workflow construction. Both the Dart backend and MCP server can submit workflows.
+
+### Supported Models
+
+| Model | Steps | Resolution | Speed | Notes |
+|-------|-------|-----------|-------|-------|
+| FLUX Schnell | 4 | 1024×1024 | ~40s | Default, best quality/speed balance |
+| FLUX Dev | 25 | 1024×1024 | ~90s | Highest quality |
+| SDXL Lightning | 4 | 1024×1024 | ~3s | Fast, good quality |
+| SDXL Turbo | 1 | 512×512 | ~3s | Draft quality |
+
+### Generation Flow
+
+1. User submits prompt via Web UI panel or MCP `image_generate` / `image_pipeline` tool
+2. Dart backend creates an async job, returns `jobId` immediately
+3. Background task builds ComfyUI workflow JSON for the selected model
+4. Workflow POSTed to ComfyUI `/prompt`
+5. Backend polls `/history/{promptId}` every 500ms (up to 600s timeout)
+6. Images fetched from ComfyUI, saved to `/app/pictures/`, returned as download URLs
+7. Frontend polls `/api/image/job/{jobId}` every 2s for progress
+
+### Fallback Chain
+
+```
+ComfyUI (preferred) → LM Studio /v1/images/generations → error
+```
+
+### Known Image Generation Gaps
+
+- `/api/image/generate` requires `COMFYUI_URL` even for cloud backend paths
+- Batch `count > 1` has uninitialized child job IDs in local mode; cloud `count` is forwarded but not consumed
+- SDXL Lightning img2img/inpaint skips the Lightning UNet merge
+- ControlNet hardcodes SD1.5 weights and a fixed SDXL checkpoint instead of respecting the selected model
+- Download endpoint (`/api/image/download/<filename>`) is not user-scoped — guessable filenames expose other users' files
+- Inpaint browser flow exits before the first real status check and posts preview-scaled canvas dimensions
+
+---
+
+## GPU Resource Management
+
+A background GPU TTL watcher (`docker/mcp/gpu_ttl.py`) auto-unloads idle GPU resources after a configurable timeout.
+
+| System | Monitored Via | Unload Method |
+|--------|--------------|---------------|
+| ComfyUI (RTX 3090) | `/system_stats` VRAM + `/queue` | `POST /free` |
+| LM Studio (RTX 3090) | `/api/v0/models` loaded state | `POST /api/v0/models/unload` |
+| aichat-vision (Arc A380) | CLIP + SDXL pipeline state | `POST /unload` |
+
+| Env Var | Default | Description |
+|---------|---------|-------------|
+| `GPU_IDLE_TTL` | `600` | Seconds of inactivity before unload |
+| `GPU_TTL_POLL_INTERVAL` | `60` | Poll frequency (seconds) |
+| `GPU_TTL_ENABLED` | `true` | Kill switch |
+
+Safety: checks ComfyUI queue before unload; re-checks idle timestamp immediately before POST; fail-open (never unloads on unreachable endpoint).
+
+GPU TTL state is exposed in the MCP `/health` response under `gpu_ttl`.
+
+---
+
+## Arc A380 Preprocessing
+
+The Intel Arc A380 runs `qwen2.5-3b-instruct` via LM Studio on `:1235`. It serves three preprocessing roles:
+
+**1. Tool Routing (3s timeout)**
+Classifies the user message and selects 1–3 tools from the model's allowed set. Falls back to keyword-based rule routing on timeout.
+
+**2. Prompt Compression (5s timeout)**
+For small-context models (`condensed` prompt size), compresses personality system prompts from ~2KB to under 500 chars. Cached per personality+model combo in Redis.
+
+**3. Context Compaction (Redis TTL 1h)**
+Summarizes long conversations and caches the summary. Subsequent messages reuse the cached summary instead of re-summarizing.
+
+```
+User request → Dart server
+  ├── Redis: cached context? (sub-ms)
+  ├── If miss: Arc A380 compacts conversation (3–5s) → cache Redis
+  ├── Arc A380: select tools (3s)
+  ├── Arc A380: compress prompt if condensed model (5s, cached)
+  └── RTX 3090: main generation with compact context + selected tools
+```
+
+Graceful degradation: if Arc or Redis is unreachable, falls back to rule-based routing and uncompressed prompts.
+
+---
+
+## Prerequisites
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| OS | Linux (any distro with Docker) | Fedora 43 / Ubuntu 24.04 |
+| OS | Linux (Docker-capable) | Fedora 43 / Ubuntu 24.04 |
 | Docker | 24.0+ with Compose v2 | Latest stable |
 | Python | 3.12+ | 3.14 |
 | Dart SDK | Stable channel | Latest stable |
 | LM Studio | Any version | Latest with JIST support |
-| GPU (inference) | 8GB VRAM | NVIDIA RTX 3090 (24GB) |
-| GPU (preprocessing) | Optional | Intel Arc A380 (6GB) |
+| GPU (inference) | 8 GB VRAM | NVIDIA RTX 3090 (24 GB) |
+| GPU (preprocessing) | Optional | Intel Arc A380 (6 GB) |
 | RAM | 16 GB | 64 GB |
 | Storage | 20 GB free | NVMe SSD for Docker volumes |
 
@@ -296,17 +518,17 @@ When a user asks for images/pictures/photos, the tool router sends **only the `i
 git clone https://github.com/Al-Sarraf-Tech/aichat.git
 cd aichat
 
-# Create environment file
 cat > .env << 'EOF'
 POSTGRES_PASSWORD=your_secure_password_here
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=your_minio_password_here
 JWT_SECRET=$(openssl rand -hex 32)
-ADMIN_USER=your_username
+ADMIN_USER=admin
 ADMIN_INITIAL_PASSWORD=your_password_here
-IMAGE_GEN_BASE_URL=http://your-lm-studio-host:1234
-IMAGE_GEN_MODEL=openai/gpt-oss-20b
-# Optional: ComfyUI for high-quality image generation (FLUX/SDXL)
+LM_STUDIO_URL=http://192.168.50.2:1234
+# Optional: Arc A380 for tool routing (leave empty for rule-based routing)
+TOOL_ROUTER_URL=http://localhost:1235
+# Optional: ComfyUI for image generation
 COMFYUI_URL=http://your-comfyui-host:8188
 EOF
 ```
@@ -314,23 +536,22 @@ EOF
 ### 2. Start all services
 
 ```bash
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d
 ```
 
-First run builds all images (~10-15 min). Subsequent starts take under 30 seconds.
+First run builds all images (~10–15 min). Subsequent starts take under 30 seconds.
 
 ### 3. Verify the stack
 
 ```bash
-make smoke    # hits /health on every service
-# or manually:
-curl http://localhost:8096/health   # MCP: {"ok":true}
-curl http://localhost:8200/health   # Web: {"ok":true,"service":"dartboard"}
+make smoke                        # hits /health on every service
+curl http://localhost:8096/health  # MCP: {"ok":true}
+curl http://localhost:8200/health  # Web: {"ok":true,"service":"dartboard"}
 ```
 
 ### 4. Access the Web UI
 
-Open **http://localhost:8200** in your browser. Log in with the `ADMIN_USER` / `ADMIN_INITIAL_PASSWORD` from your `.env`.
+Open **http://localhost:8200**. Log in with the `ADMIN_USER` / `ADMIN_INITIAL_PASSWORD` from `.env`.
 
 ### 5. Install the TUI (optional)
 
@@ -339,6 +560,10 @@ pip install -e ".[dev]"
 aichat              # interactive TUI
 aichat "question"   # one-shot chat
 ```
+
+### 6. Connect via LM Studio MCP (optional)
+
+Use `lmstudio-mcp.json` as the MCP configuration file. Points to `http://localhost:8096/sse`.
 
 ---
 
@@ -349,290 +574,67 @@ aichat "question"   # one-shot chat
 | Variable | Service | Default | Description |
 |----------|---------|---------|-------------|
 | `POSTGRES_PASSWORD` | db, auth, data | *required* | PostgreSQL password |
-| `JWT_SECRET` | auth | *required* | JWT signing key (use `openssl rand -hex 32`) |
+| `JWT_SECRET` | auth | *required* | JWT signing key — use `openssl rand -hex 32` |
 | `ADMIN_USER` | auth | `admin` | Admin username (auto-created on first start) |
 | `ADMIN_INITIAL_PASSWORD` | auth | — | Initial admin password |
-| `IMAGE_GEN_BASE_URL` | mcp | `http://192.168.50.2:1234` | LM Studio URL for MCP tools |
-| `IMAGE_GEN_MODEL` | mcp | *(auto)* | Pin model for MCP; empty = auto-select |
-| `MINIO_ROOT_USER` | minio | `minioadmin` | MinIO admin user |
-| `MINIO_ROOT_PASSWORD` | minio | *required* | MinIO admin password |
-| `LM_STUDIO_URL` | web | `http://192.168.50.2:1234` | LM Studio URL for web server |
-| `LM_STUDIO_FALLBACK_URL` | web | `http://100.78.39.76:1234` | Failover LM Studio URL |
-| `TOOL_ROUTER_URL` | web | — | Arc A380 URL (empty = rule-based routing) |
+| `LM_STUDIO_URL` | web | `http://192.168.50.2:1234` | Primary LM Studio endpoint |
+| `LM_STUDIO_FALLBACK_URL` | web | — | Failover LM Studio URL |
+| `TOOL_ROUTER_URL` | web | — | Arc A380 URL; empty = rule-based routing |
 | `MCP_URL` | web | `http://aichat-mcp:8096` | MCP server URL |
 | `MAX_TOOL_ITERATIONS` | web | `4` | Max tool call loops per request |
-| `COMFYUI_URL` | mcp, web | *(see compose)* | ComfyUI endpoint for image generation |
-| `GPU_IDLE_TTL` | mcp | `600` | Seconds before idle GPU models auto-unload |
-| `GPU_TTL_ENABLED` | mcp | `true` | Enable/disable GPU auto-unload |
+| `IMAGE_GEN_BASE_URL` | mcp | `http://192.168.50.2:1234` | LM Studio for MCP image tools |
+| `IMAGE_GEN_MODEL` | mcp | *(auto)* | Pin model for MCP; empty = auto-select |
+| `COMFYUI_URL` | mcp, web | — | ComfyUI endpoint for FLUX/SDXL generation |
 | `VISION_GEN_URL` | mcp, web | *(internal)* | Vision service OpenVINO generate endpoint |
+| `MINIO_ROOT_USER` | minio | `minioadmin` | MinIO admin user |
+| `MINIO_ROOT_PASSWORD` | minio | *required* | MinIO admin password |
+| `GPU_IDLE_TTL` | mcp | `600` | Seconds before idle GPU models are unloaded |
+| `GPU_TTL_ENABLED` | mcp | `true` | Enable/disable GPU auto-unload |
 
-### Adapting to Your Hardware
+### Single-Machine Setup
 
-**Single machine (no Arc GPU):**
 ```bash
-# .env — leave TOOL_ROUTER_URL empty to use rule-based routing
 LM_STUDIO_URL=http://localhost:1234
 LM_STUDIO_FALLBACK_URL=http://localhost:1234
-TOOL_ROUTER_URL=
+TOOL_ROUTER_URL=    # empty = rule-based routing
 ```
 
-**Two machines (like this setup):**
+### Two-Machine Setup (like production)
+
 ```bash
-# .env
-LM_STUDIO_URL=http://gpu-workstation:1234    # RTX 3090
-TOOL_ROUTER_URL=http://gpu-workstation:1235  # Arc A380 (or same host)
+LM_STUDIO_URL=http://192.168.50.2:1234    # RTX 3090 machine
+TOOL_ROUTER_URL=http://192.168.50.5:1235  # Arc A380 machine (or same host)
 ```
-
----
-
-## Web UI
-
-The web interface is a vanilla JS single-page application with a ChatGPT-like design.
-
-### Features
-
-- **Streaming responses** with blinking cursor, token/s counter, and elapsed time
-- **Dedicated tool cards** for active tool calls with live elapsed timers
-- **Image grid** with responsive CSS Grid layout and lightbox (keyboard nav: Escape, arrows)
-- **Image dedup** with URL normalization (strips CDN size suffixes, query params)
-- **Model selector** with state dots (loaded/unloaded), quantization, context length, type (LLM/VLM), tool count
-- **Thinking/reasoning** content in collapsible cards (hidden by default)
-- **30 personalities** including category-filtered grid, custom prompts
-- **File uploads** (images for vision models, text/code files inline)
-- **Per-user chat isolation** via JWT auth
-- **Admin panel** at `:8247` for user management, IP ban control
-
-### SSE Event Types
-
-The backend streams responses via Server-Sent Events:
-
-| Event | Description |
-|-------|-------------|
-| `status` | Loading model indicator |
-| `thinking` | Reasoning/thinking content (collapsible) |
-| `token` | Content tokens (buffered, rendered once on `done`) |
-| `tool_start` | Tool execution started (shows card if not suppressed) |
-| `tool_result` | Tool execution complete (images collected for final render) |
-| `error` | Error message |
-| `done` | Stream complete, triggers single render pass |
-
-### Buffer-Then-Render Architecture
-
-Tokens are accumulated in memory during streaming. The DOM is updated with a lightweight plain-text preview only. On `done`, a single markdown render pass (marked.js + DOMPurify + highlight.js) produces the final output. This eliminates DOM thrashing and keeps the UI smooth during long generations.
-
----
-
-## TUI Usage
-
-```
-aichat [OPTIONS] [MESSAGE]
-
-Subcommands:
-  aichat mcp          Run MCP server over stdio
-  aichat repo create  Create and push GitHub repo
-```
-
-### Keyboard Shortcuts
-
-| Key | Action | Key | Action |
-|-----|--------|-----|--------|
-| F1 | Help | F7 | Sessions |
-| F2 | Model picker | F8 | Settings |
-| F3 | Search | F9 | New Chat |
-| F4 | Approval cycle | F10 | Clear |
-| F5 | Theme picker | F11 | Cancel |
-| F6 | Toggle streaming | F12 | Quit |
-| Ctrl+S | Shell toggle | Ctrl+G | Personality |
-
----
-
-## Image Generation
-
-Image generation runs on **ComfyUI** (WSL2, RTX 3090) with dynamic workflow construction. Both the Dart web backend and the MCP tool server can submit workflows.
-
-### Supported Models
-
-| Model | Steps | Resolution | Speed (cached) | Notes |
-|-------|-------|-----------|----------------|-------|
-| FLUX Schnell | 4 | 1024x1024 | ~40s | Best quality, default |
-| FLUX Dev | 25 | 1024x1024 | ~90s | Highest quality, slowest |
-| SDXL Lightning | 4 | 1024x1024 | ~3s | Fast, good quality |
-| SDXL Turbo | 1 | 512x512 | ~3s | Fastest, draft quality |
-
-### How It Works
-
-1. User submits a prompt via the web UI image generation panel or MCP `image_generate` tool
-2. The Dart backend creates an async job, returns a `jobId` immediately (Cloudflare-safe)
-3. A background task builds a ComfyUI workflow JSON dynamically based on the selected model
-4. The workflow is submitted to ComfyUI's `/prompt` API
-5. The backend polls `/history/{promptId}` every 500ms until complete (up to 600s timeout)
-6. Generated images are fetched from ComfyUI, saved to `/app/pictures/`, and returned as download URLs
-7. The frontend polls `/api/image/job/{jobId}` every 2s to display progress and results
-
-### Current QA Caveats (2026-04-01)
-
-- `/api/image/generate` still hard-requires `COMFYUI_URL`, even when the caller selects `backend=openai` or `backend=gemini`, and the router currently relies on undocumented `image_pipeline(mode="direct")` behavior for cloud renders.
-- Non-square cloud requests are not trustworthy yet: the Dart router emits ad-hoc aspect ratios, while `image_pipeline` only advertises a fixed enum set and falls back to `1024x1024` outside it.
-- Batch generation is not production-ready. Local `count > 1` still fans out to uninitialized child job IDs, cloud `count` is forwarded but ignored in `docker/mcp/agents.py`, and multi-image saves still reuse the same output filename pattern.
-- Inpaint is not release-ready: the browser closes inpaint mode before polling, never marks the request as actively generating, and posts preview-scaled canvas dimensions instead of the source image size.
-- ComfyUI workflow variants still need correction: SDXL Lightning img2img/inpaint skip the Lightning UNet merge, and ControlNet hardcodes SD1.5 weights plus a fixed SDXL base checkpoint instead of respecting the selected model.
-- Saved image access is not user-scoped yet. `/api/image/download/<filename>` authorizes by sanitized filename only, so guessed filenames can expose another user’s saved image.
-- There is still no focused automated coverage for `/api/image/*`, image-job ownership, download authorization, API aspect-ratio mapping, batch aggregation, or imagegen UI polling/inpaint flows.
-
-### ComfyUI Configuration
-
-ComfyUI runs in Docker on WSL2 with these optimizations for the 32GB RAM / 24GB VRAM environment:
-
-```
---disable-pinned-memory    # prevents 30GB pinned RAM allocation (OOM prevention)
---disable-async-offload    # reduces stream memory overhead
---fp8_e4m3fn-unet          # halves UNET memory (12GB → 6GB)
---fp8_e4m3fn-text-enc      # halves CLIP encoder (9.3GB → 5GB)
---cpu-vae                  # offloads VAE decode to CPU
-```
-
-Compose file: `vision/compose/comfyui/docker-compose.yml` on WSL2.
-
-### Fallback Chain
-
-```
-ComfyUI (preferred) → LM Studio /v1/images/generations (fallback) → error
-```
-
----
-
-## GPU Resource Management
-
-A background **GPU TTL watcher** (`docker/mcp/gpu_ttl.py`) automatically unloads GPU models after 10 minutes of inactivity across all three GPU systems:
-
-| System | What's Monitored | Unload Method |
-|--------|-----------------|---------------|
-| ComfyUI (RTX 3090) | VRAM usage via `/system_stats` + queue via `/queue` | `POST /free` |
-| LM Studio (RTX 3090) | Per-model loaded state via `/api/v0/models` | `POST /api/v0/models/unload` |
-| aichat-vision (Arc A380) | CLIP + SDXL pipeline state | `POST /unload` |
-
-### Configuration
-
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `GPU_IDLE_TTL` | `600` | Seconds before idle models are unloaded (10 min) |
-| `GPU_TTL_POLL_INTERVAL` | `60` | How often to check idle state (seconds) |
-| `GPU_TTL_ENABLED` | `true` | Kill switch to disable auto-unload |
-
-### Safety Guards
-
-- Checks ComfyUI `/queue` before unloading (prevents mid-generation unload)
-- Re-checks idle timestamp immediately before POST to prevent race conditions
-- Fail-open: if any API is unreachable, skips that check (never unloads on assumption)
-- All unload events logged at INFO level
-
-### Monitoring
-
-The `/health` endpoint on the MCP service includes GPU TTL status:
-
-```json
-{
-  "gpu_ttl": {
-    "enabled": true,
-    "ttl_seconds": 600,
-    "comfyui_idle_seconds": 342,
-    "comfyui_unloaded": false,
-    "lm_studio_models_idle": {"model-name": 180},
-    "vision_idle_seconds": 500,
-    "vision_unloaded": false
-  }
-}
-```
-
----
-
-## Arc A380 Preprocessing
-
-The Intel Arc A380 runs a Qwen2.5-3B-Instruct model that serves three roles:
-
-### 1. Tool Routing (3s timeout)
-Classifies the user message and selects 1-3 tools from the available set. Falls back to keyword-based rule routing on timeout.
-
-### 2. Prompt Compression (5s timeout)
-For small-context models (`condensed` prompt size), compresses the personality system prompt from ~2KB to under 500 characters. Cached per personality+model combo.
-
-### 3. Context Compaction Cache (via Redis)
-Long conversations are summarized by the Arc model and cached in Redis (TTL 1h). On subsequent messages, the cached summary is used instead of re-summarizing.
-
-```
-User Request → Dart Server
-  ├── Check Redis: cached context? (sub-ms)
-  ├── If miss: Arc A380 compacts conversation (3-5s) → cache in Redis
-  ├── Arc A380: select tools (3s)
-  ├── Arc A380: compress prompt if condensed model (5s, cached)
-  └── RTX 3090: main generation with compact context + selected tools
-```
-
-**Graceful degradation**: If Arc or Redis is unreachable, the system falls back to rule-based tool routing and uncompressed prompts. No single point of failure.
-
----
-
-## Image Search Pipeline
-
-Image *search* requests (as opposed to image *generation*) go through a dedicated pipeline:
-
-1. **Tool routing** detects image keywords → sends ONLY the `image` tool (not `web`)
-2. **MCP image search** queries SearXNG (aggregates Google Images + Bing Images), DDG, and Bing directly
-3. **Real CDN URLs** are returned (no hallucinated URLs) plus inline base64 thumbnails
-4. **Dedup** via `normalizeImageUrl()` — strips query params, CDN size suffixes (`_300x200`, `_thumb`)
-5. **Frontend render** — responsive CSS Grid, click for lightbox, broken images auto-hidden via `onerror`
-
-Images from tool results are collected during streaming and rendered in a single pass on `done`. Markdown image tags in the model's text are only stripped when tool_result already provided the same images (dedup), otherwise preserved.
-
----
-
-## Personalities
-
-30 built-in personalities across 10 categories:
-
-| Category | Examples |
-|----------|---------|
-| General | Master orchestrator (unrestricted) |
-| Technology | Linux/DevOps, Full-stack programmer, AI/ML, Cybersecurity |
-| News & Politics | Political analyst, Military/Defense, Legal |
-| Science | Space, Economics, Symbolic logic |
-| Entertainment | Anime, Gaming, Retro gaming, Film/TV |
-| Creative | Writer, Music, Food/Chef |
-| Health | Medical, Fitness, Psychology |
-| Business | Finance, Automotive, Sports |
-| Humanities | Philosophy, History |
-| Special | Model-restricted personalities (dolphin-only) |
-
-Model-restricted personalities are only visible when a compatible model is selected.
 
 ---
 
 ## CI/CD Pipeline
 
-Two workflow files:
+Three workflow files in `.github/workflows/`:
 
-### `ci-aichat.yml` (Generated by Haskell Orchestrator)
-- **Governance**: `repo-guard` job verifies repository ownership before any other job runs
-- **Lint**: `ruff check .`
-- **Test**: `pytest` — architecture tests
-- **Security**: `gitleaks` secret scan
-- Runs on self-hosted runners with ephemeral containers
+### `ci-aichat.yml`
+Generated and governed by the Haskell Orchestrator.
 
-### `dart-ci.yml` (Dart web server)
-- **Lint**: `dart format --set-exit-if-changed`, `dart analyze`
-- **Test**: `dart test test/dart/`
-- **Frontend**: `node -c docker/web/web/app.js` syntax check
-- Triggers only on Dart/web file changes
+| Job | Steps |
+|-----|-------|
+| `repo-guard` | Verifies repository ownership before all other jobs |
+| `lint` | `ruff check .` |
+| `test` | `pytest tests/test_architecture.py` |
+| `security` | `gitleaks`, `bandit`, `pip-audit`, `shellcheck`, `trivy`, `semgrep` |
+| `build` | `docker compose build` of core services |
+| `release` | SHA256SUMS + GitHub release assets on tag push |
 
----
+### `ci-dart.yml`
+Triggers on Dart/web file changes only.
 
-## Docker Service Security
+| Job | Steps |
+|-----|-------|
+| `lint` | `dart format --set-exit-if-changed`, `dart analyze` |
+| `test` | `dart test test/dart/` |
+| `frontend` | `node -c docker/web/web/app.js` syntax check |
 
-Security hardening applied to the Docker service layer in v0.2.0:
-
-- **Connection timeouts**: All PostgreSQL connections (auth and data services) use `connect_timeout=10` to prevent hung goroutines during database unavailability
-- **SQL injection fix**: Memory TTL storage in `aichat-data` uses parameterized `make_interval(secs => %s)` instead of string-interpolated SQL
-- **Path traversal guard**: `aichat-vision` validates all local file paths through `_validate_local_path()`, which normalises the path without following symlinks and enforces strict containment within `WORKSPACE`. Applies to `/info`, `/frames`, `/thumbnail`, and `/transcode` endpoints
+### `orchestrator-scan.yml`
+Delegates to `Al-Sarraf-Tech/Haskell-Orchestrator/.github/workflows/orchestrator-scan.yml@v4.0.0` for pre-merge governance.
 
 ---
 
@@ -642,100 +644,114 @@ Security hardening applied to the Docker service layer in v0.2.0:
 
 ```bash
 # Docker stack
-make build          # Build all service images
-make up             # Start full stack
-make down           # Stop and remove containers
+make build          # build all service images
+make up             # start full stack
+make down           # stop and remove containers
 make restart        # down + up
-make logs           # Follow logs
-make smoke          # Health check all services
+make logs           # follow all service logs
+make smoke          # health check all services
 
 # Python
-make test           # Run pytest suite
+make test           # run pytest suite
 make lint           # ruff + mypy
+make security-checks  # shellcheck + bandit + safety + semgrep + trivy
 
-# Dart web server
-make dart-get       # Install Dart dependencies
-make dart-analyze   # Run dart analyze
-make dart-test      # Run Dart tests
-make dart-build     # Compile native binary
-make dart-run       # Run web server locally
+# Dart
+make dart-get       # install Dart dependencies
+make dart-analyze   # run dart analyze
+make dart-test      # run Dart tests
+make dart-build     # compile native binary
+make dart-run       # run web server locally
 ```
 
 ### Project Layout
 
 ```
 aichat/
-├── src/aichat/              # TUI source (Textual app)
-│   ├── app.py               # Main TUI application
-│   ├── ui/                  # Widgets, keybinds, modals
-│   ├── themes.py            # Theme registry
-│   └── model_labels.py      # Model capability badges
-├── lib/                     # Dart web server source
+├── src/aichat/              # TUI (Python/Textual)
+│   ├── app.py               # Main TUI (2,733 lines)
+│   ├── mcp_server.py        # MCP stdio server (2,546 lines)
+│   ├── tools/               # Tool implementations (manager, browser, LM Studio, etc.)
+│   ├── ui/                  # Textual widgets, modals, keybind bar
+│   ├── personalities.py     # Personality definitions
+│   └── themes.py            # Theme registry
+├── lib/                     # Dart web server
 │   ├── router.dart          # HTTP API, SSE streaming, tool execution loop
+│   ├── image_handler.dart   # ComfyUI image generation
+│   ├── model_profiles.dart  # Per-model tool tiers and parameters
+│   ├── personalities.dart   # 31 personalities
+│   ├── tool_router.dart     # Rule-based + Arc GPU routing
 │   ├── llm_client.dart      # LM Studio client
 │   ├── mcp_client.dart      # MCP JSON-RPC client
-│   ├── tool_router.dart     # Rule-based + GPU tool routing
-│   ├── model_profiles.dart  # Per-model tool tiers and parameters
-│   ├── personalities.dart   # 30 AI personalities
-│   ├── database.dart        # SQLite conversation storage
-│   └── config.dart          # Environment-based configuration
+│   └── database.dart        # SQLite conversation storage
 ├── bin/server.dart           # Dart server entry point
 ├── docker/
-│   ├── web/                 # Web server Dockerfile + frontend
-│   │   ├── Dockerfile
-│   │   └── web/             # app.js, style.css, index.html
-│   ├── auth/                # Auth proxy Dockerfile + server.py
-│   ├── mcp/                 # MCP server (FastAPI, 16 mega-tools)
-│   │   ├── app.py           # Main MCP app (9000+ lines, 102 tools)
-│   │   └── gpu_ttl.py       # GPU idle TTL auto-unload watcher
-│   ├── data/                # Data service
-│   ├── vision/              # Vision service (OCR, CLIP, YOLOv8n, video, OpenVINO SDXL)
-│   ├── browser/             # Headless Chromium
-│   ├── docs/                # Document processing
+│   ├── mcp/                 # MCP server (FastAPI, 6,561-line app.py, 85 tools)
+│   │   ├── app.py
+│   │   ├── agents.py        # SSH CLI + LM Studio agent dispatch
+│   │   ├── gpu_ttl.py       # GPU idle TTL watcher
+│   │   ├── orchestrator.py  # Intent classification, concurrency control
+│   │   ├── tools/           # 20 tool modules
+│   │   ├── handlers/        # Per-category route handlers
+│   │   └── search/          # SearXNG + DDG/Bing parsers
+│   ├── web/                 # Web server Dockerfile + app.js/style.css/index.html
+│   ├── auth/                # Flask JWT proxy
+│   ├── data/                # Data service + PostgreSQL migrations
+│   ├── vision/              # OCR, CLIP, YOLOv8n, video, OpenVINO SDXL
+│   ├── browser/             # Playwright Chromium
+│   ├── docs/                # Document/PDF service
 │   ├── sandbox/             # Code execution sandbox
 │   ├── jupyter/             # Jupyter kernel
-│   ├── searxng/             # Meta-search engine
-│   ├── inference/           # Intel Arc OpenVINO embeddings
+│   ├── searxng/             # SearXNG config
+│   ├── inference/           # Arc OpenVINO embeddings
 │   └── whatsapp/            # WhatsApp bot
-├── test/                    # Tests (Python + Dart)
-├── docker-compose.yml       # Full stack definition
+├── tests/                   # Python tests (73 files)
+│   └── tools/               # MCP tool unit tests (11 modules)
+├── test/                    # Dart tests + Playwright E2E (2 files)
+├── docker-compose.yml       # Base stack definition (no host ports)
+├── docker-compose.ports.yml # Host port bindings
+├── lmstudio-mcp.json        # LM Studio MCP client config
 ├── pubspec.yaml             # Dart dependencies
-├── pyproject.toml           # Python project config
-├── Makefile                 # Build targets
-└── .env                     # Local config (not committed)
+├── pyproject.toml           # Python project config (version 0.2.0)
+└── Makefile
 ```
 
 ---
 
-## Replicating This Setup
+## Test Coverage
 
-### Minimal Setup (Single Machine, One GPU)
+### Python Tests
 
-1. Install [LM Studio](https://lmstudio.ai) and load a chat model
-2. Clone this repo, create `.env` with your PostgreSQL/JWT passwords
-3. Set `LM_STUDIO_URL=http://localhost:1234` and leave `TOOL_ROUTER_URL` empty
-4. `docker compose up -d` — wait for builds
-5. Open `http://localhost:8200`, register, and start chatting
+| Suite | File | Scope |
+|-------|------|-------|
+| Smoke | `tests/test_smoke.py` | Service health checks (requires running stack) |
+| Architecture | `tests/test_architecture.py` | Structural constraints (CI) |
+| Full regression | `tests/test_full_regression.py` | All MCP tools and service endpoints |
+| Image pipeline | `tests/test_image_pipeline.py` | Image tool paths |
+| Model E2E | `tests/test_model_e2e.py` | All LLM models end-to-end |
+| Image rendering E2E | `tests/test_image_rendering_e2e.py` | Rendering pipeline |
+| Tool priority | `tests/test_tool_priority.py` | Tool routing logic |
+| MCP tool units | `tests/tools/` | Per-module unit tests (11 modules) |
+| Browser E2E | `test/test_playwright_e2e.py` | Playwright browser flows |
+| Dartboard E2E | `tests/test_dartboard_e2e.py` | Web server E2E |
+| + 60 more | `tests/test_*.py` | Streaming, compaction, vision, TUI, SSH, agents, etc. |
 
-### Full Setup (Two GPUs, Network Split)
+73 Python test files total. Run with:
 
-1. **Inference machine** (e.g., Windows desktop with RTX 3090):
-   - Install LM Studio, load your models, expose on `:1234`
-2. **Services machine** (e.g., Linux server with Intel Arc):
-   - Clone this repo
-   - Set up LM Studio with `qwen2.5-3b-instruct` on the Arc GPU, expose on `:1235`
-   - Configure `.env` with the inference machine's IP
-   - `docker compose up -d`
-3. Access the web UI on `:8200` from any device on your network
+```bash
+python3 -m pytest tests/test_smoke.py -v --timeout=60
+python3 -m pytest tests/ -v --timeout=120   # full suite (requires running stack)
+```
 
-### Key Design Decisions
+Pytest markers: `smoke`, `regression`, `mega_tools`, `unit`, `integration`, `e2e`.
 
-- **Vanilla JS frontend**: No React/Vue/Svelte — the entire frontend is ~1200 lines of plain JavaScript. Easy to understand, modify, and deploy without a build step.
-- **Buffer-then-render**: Tokens stream into a text buffer; DOM updates once on completion. No innerHTML thrashing.
-- **Tool tier system**: Models get only the tools they can reliably use. Fewer tools = fewer hallucinated tool calls = faster responses.
-- **Image-only routing**: Image requests bypass `web` search entirely. The `image` tool uses real image search engines (SearXNG/DDG/Bing Images) and returns actual CDN URLs.
-- **Arc preprocessing**: A cheap 3B model handles classification/compression so the expensive 20B+ model spends its context window on actual generation.
-- **Redis context cache**: Conversation summaries are cached for 1 hour. Repeat messages in long conversations skip re-summarization.
+### Dart Tests
+
+```bash
+dart test test/dart/   # database, profiles, sanitizer, helpers, image handler
+```
+
+82 unit tests covering Dart backend components.
 
 ---
 
@@ -743,29 +759,25 @@ aichat/
 
 | Issue | Status |
 |-------|--------|
-| Arc A380 tool router requires LM Studio running locally on `:1235` | Falls back to rule-based routing when unavailable |
-| Some CDNs block image HEAD requests | Backend trusts image tool URLs directly (no HEAD validation) |
-| Dolphin model may call `browser` with invalid actions (`fetch_page_images`) | MCP returns error; model retries with valid actions |
-| Max 4 images per response | Hardcoded in router.dart; increase `maxImagesPerResponse` if needed |
+| Arc A380 tool router requires LM Studio running on `:1235` | Falls back to rule-based routing when unavailable |
+| Image download endpoint is not user-scoped | Guessable filenames can expose other users' files |
+| Dart backend can be accessed without the Flask auth proxy | `X-Auth-User` header routes fall back to global access |
+| Request/SSE buffer caps not fully enforced | Large bodies, attachments, and long SSE lines lack explicit limits |
+| Batch generation (`count > 1`) not production-ready | Local: uninitialized child job IDs; cloud: count ignored |
+| SDXL Lightning img2img/inpaint skips Lightning UNet merge | — |
+| ControlNet hardcodes SD1.5 weights against SDXL checkpoints | — |
 | WhatsApp QR must be scanned manually at `:8097` | By design — no credential storage |
-| Reasoning models (phi-4) fill `max_tokens` with thinking tokens | Use dense instruction models for tool-heavy tasks |
-
-### QA Follow-Ups (2026-04-01)
-
-- The Dart backend still uses a split-trust auth model. If it is reachable without the Flask auth proxy, routes that derive scope from `X-Auth-User` still fall back to global access.
-- Image generation artifacts are not fully user-scoped yet. Terminal image jobs currently lose `user_id`, polling is keyed only by `jobId`, and persisted files are still downloadable by filename.
-- Request and stream memory limits are incomplete in the Dart and browser layers. Large JSON bodies, attachment payloads, and long SSE lines still need explicit backend/client caps.
-- The `chat` tool's `inputSchema` now declares `model` and `effort` parameters. Verify schema-aware clients pick them up correctly.
-- Image generation v3 still needs targeted QA coverage for `/api/image/*`, workflow node contracts, multi-image aggregation, cloud backend conditioning, and inpaint browser flows.
+| Reasoning models (phi-4) fill `max_tokens` with thinking tokens | Use instruction models for tool-heavy tasks |
+| Max 4 images per response | Configurable via `maxImagesPerResponse` in `router.dart` |
 
 ---
 
-## CI/CD & Orchestration
+## CI/CD Governance
 
-This project is governed by the [Haskell Orchestrator](https://github.com/Al-Sarraf-Tech/Haskell-Orchestrator) — a Haskell-based multi-agent CI/CD governance framework for pre-push validation, code quality enforcement, and release management across the Al-Sarraf-Tech organization.
+This project is governed by the [Haskell Orchestrator](https://github.com/Al-Sarraf-Tech/Haskell-Orchestrator) — a Haskell-based multi-agent CI/CD framework for pre-push validation, code quality enforcement, and release management across the Al-Sarraf-Tech organization.
 
 ---
 
 ## Disclaimer
 
-The author is not responsible for how users use this program. Use at your own risk. All AI inference runs locally — no data is sent to external servers unless you configure external search engines.
+All AI inference runs locally. No data is sent to external servers unless you configure external search engines (SearXNG is self-hosted by default) or external LM Studio endpoints. Use at your own risk.
